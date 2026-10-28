@@ -80,7 +80,7 @@ export default function SubmitPage() {
 
   return (
     <>
-      <section className="hero">
+      <section className="hero hero-submit">
         <p className="kicker">Feed the chart</p>
         <h1>
           Submit <em>doom</em>
@@ -141,11 +141,22 @@ export default function SubmitPage() {
           <textarea name="note" rows={3} maxLength={500} />
         </label>
         <input className="hp" name="website" tabIndex={-1} autoComplete="off" aria-hidden="true" />
-        {state.msg && <div className={`msg${state.ok ? "" : " err"}`}>{state.msg}</div>}
-        <div>
+        {state.msg && (
+          <div className={`msg${state.ok ? "" : " err"}`} role="status">
+            {state.msg}
+            {state.ok && (
+              <>
+                {" "}
+                <a href="/vote">Vote while you wait ▶</a>
+              </>
+            )}
+          </div>
+        )}
+        <div className="submit-row">
           <button className="btn" disabled={busy}>
-            Send it
+            {busy ? "Sending…" : "Send it"}
           </button>
+          <span className="hint">A human checks it, then it joins the fight.</span>
         </div>
       </form>
     </>

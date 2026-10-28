@@ -52,9 +52,21 @@ const HEIGHTS: Partial<Record<Platform, number>> = {
   tiktok: 560,
 };
 
-export default function Embed({ platform, embedId, url }: { platform: Platform; embedId: string; url: string }) {
+export default function Embed({
+  platform,
+  embedId,
+  url,
+  start,
+  autoplay,
+}: {
+  platform: Platform;
+  embedId: string;
+  url: string;
+  start?: number;
+  autoplay?: boolean;
+}) {
   if (platform === "x") return <Tweet id={embedId} url={url} />;
-  const src = iframeSrc(platform, embedId);
+  const src = iframeSrc(platform, embedId, { start, autoplay });
   if (!src) {
     return (
       <div className="embed">

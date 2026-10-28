@@ -1,5 +1,6 @@
-import { hasDb, leaderboard, SCENES, type ChartSort, type ChartWindow, type Scene, type Song } from "@/lib/db";
+import { hasDb, leaderboard, SCENES, stats, type ChartSort, type ChartWindow, type Scene, type Song } from "@/lib/db";
 import { formatCount, videoLabel } from "@/components/format";
+import HowItWorks from "@/components/HowItWorks";
 
 export const dynamic = "force-dynamic";
 
@@ -57,6 +58,41 @@ function Chips({ label, items, active, to }: { label: string; items: [string, st
   );
 }
 
+function VotePrompt({ text, cta }: { text: string; cta: string }) {
+  return (
+    <li className="row-cta">
+      <span>{text}</span>
+      <a className="btn small" href="/vote">
+        {cta} ▶
+      </a>
+    </li>
+  );
+}
+
+function Ticker({ songs }: { songs: Song[] }) {
+  const items = songs.slice(0, 5);
+  if (items.length === 0) return null;
+  const run = (hidden: boolean) => (
+    <span className="ticker-run" aria-hidden={hidden || undefined}>
+      {items.map((s, i) => (
+        <span key={s.id} className="ticker-item">
+          <b>#{i + 1}</b> {s.title}
+          {s.artist ? <i> / {s.artist}</i> : null}
+        </span>
+      ))}
+    </span>
+  );
+  return (
+    <div className="ticker" role="region" aria-label="Top 5 right now">
+      <span className="ticker-tag">Top 5 now</span>
+      <div className="ticker-track">
+        {run(false)}
+        {run(true)}
+      </div>
+    </div>
+  );
+}
+
 function Videos({ song }: { song: Song }) {
   const [main, ...rest] = song.videos;
   if (!main) return null;
@@ -86,24 +122,30 @@ export default async function Home({ searchParams }: { searchParams: Promise<Raw
   const filtered = href(p, {}) !== "/";
   let songs: Song[] = [];
   let error = false;
+  let totals: Awaited<ReturnType<typeof stats>> | null = null;
   if (hasDb) {
-    try {
-      songs = await leaderboard({
+    const [board, counts] = await Promise.allSettled([
+      leaderboard({
         sort: p.sort as ChartSort,
         window: p.window as ChartWindow,
         scene: (p.scene || undefined) as Scene | undefined,
         q: p.q || undefined,
-      });
-    } catch (e) {
-      console.error(e);
+      }),
+      stats(),
+    ]);
+    if (board.status === "fulfilled") songs = board.value;
+    else {
+      console.error(board.reason);
       error = true;
     }
+    if (counts.status === "fulfilled") totals = counts.value;
   }
+  const ranked = p.sort === "rating" && p.window === "all";
   const scenes: [string, string][] = [["", "All"], ...Object.entries(SCENES)];
 
   return (
     <>
-      <section className="hero">
+      <section className="hero hero-home">
         <p className="kicker">The official chart of the end times</p>
         <h1>
           The Doom <em>100</em>
@@ -112,24 +154,49 @@ export default async function Home({ searchParams }: { searchParams: Promise<Raw
           Songs made by machines about the end of everything. Ranked by Elo, two at a time, by people who should
           probably be doing something else.
         </p>
-        <p>
-          <a className="btn" href="/vote">
-            Start ranking
+        <div className="hero-cta">
+          <a className="btn big" href="/vote">
+            Vote now ▶
           </a>
-        </p>
+          <span className="hero-cta-note">
+            The catchy bits autoplay.
+            <br />
+            You pick.
+          </span>
+        </div>
+        <HowItWorks />
+        {totals && (
+          <dl className="stats">
+            <div>
+              <dt>Songs ranked</dt>
+              <dd>{totals.songs.toLocaleString("en-US")}</dd>
+            </div>
+            <div>
+              <dt>Votes cast</dt>
+              <dd>{totals.votes.toLocaleString("en-US")}</dd>
+            </div>
+            <div>
+              <dt>In the queue</dt>
+              <dd>{totals.pending.toLocaleString("en-US")}</dd>
+            </div>
+          </dl>
+        )}
       </section>
 
       {!hasDb && (
         <div className="notice">
-          <strong>Chart offline.</strong> No database is connected yet, so nothing can be ranked. The singularity
-          is delayed.
+          <span className="notice-big">Chart offline</span>
+          No database is connected yet, so nothing can be ranked. The singularity is delayed.
         </div>
       )}
       {error && (
         <div className="notice">
-          <strong>Chart glitched.</strong> The database didn&apos;t answer. Try again in a minute.
+          <span className="notice-big">Chart glitched</span>
+          The database didn&apos;t answer. <a href="/">Try again</a> in a minute.
         </div>
       )}
+
+      {!filtered && <Ticker songs={songs} />}
 
       {hasDb && !error && (
         <section className="filters">
@@ -156,19 +223,25 @@ export default async function Home({ searchParams }: { searchParams: Promise<Raw
       {hasDb && !error && songs.length === 0 &&
         (filtered ? (
           <div className="empty">
+            <span className="empty-big">No signal</span>
             Nothing on the chart matches that. <a href="/">Reset the filters</a>.
           </div>
         ) : (
           <div className="empty">
+            <span className="empty-big">Dead air</span>
             The chart is empty. <a href="/submit">Submit the first track</a>.
           </div>
         ))}
 
       {songs.length > 0 && (
         <ol className="chart">
-          {songs.slice(0, 100).map((s, i) => (
-            <li className="row" key={s.id}>
-              <div className="rank">{i + 1}</div>
+          {songs.slice(0, 100).flatMap((s, i) => {
+            const row = (
+            <li className={`row${i < 3 ? ` top top${i + 1}` : ""}${s.scene ? ` scene-${s.scene}` : ""}`} key={s.id}>
+              <div className="rank">
+                {i === 0 && ranked && <span className="rank-tag">No.</span>}
+                {i + 1}
+              </div>
               <div className="song">
                 <div className="title">
                   {s.videos[0] ? (
@@ -192,7 +265,13 @@ export default async function Home({ searchParams }: { searchParams: Promise<Raw
                 {p.sort === "hot" && s.recent_votes ? <span className="views">{s.recent_votes} votes/wk</span> : null}
               </div>
             </li>
-          ))}
+            );
+            if (i === 2 && songs.length > 5) {
+              return [row, <VotePrompt key="cta-top" text="Think #4 deserves the top 3? The chart only moves when you vote." cta="Settle it" />];
+            }
+            return [row];
+          })}
+          <VotePrompt key="cta-end" text={songs.length > 1 ? "Disagree with this order? Two songs, pick the one that slaps." : "Get voting."} cta="Vote" />
         </ol>
       )}
     </>
