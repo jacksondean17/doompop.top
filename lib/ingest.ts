@@ -11,7 +11,7 @@ const WATCHLIST = ["anabology", "sappyalien", "niuniu255431", "JagTheHero"];
 // Claudia is @anabology's open character that other creators reuse.
 const X_QUERIES = [
   `(${WATCHLIST.map((h) => `from:${h}`).join(" OR ")}) filter:videos -filter:retweets`,
-  `(slopcore OR #slopcore OR claudia) filter:videos min_faves:10 -filter:retweets`,
+  `(slopcore OR #slopcore OR (claudia (song OR suno OR "music video" OR anabology))) filter:videos min_faves:10 -filter:retweets`,
   `("gave claude" OR "asked claude" OR "claude made" OR "claude wrote" OR "gave opus") (song OR "music video") filter:videos min_faves:10 -filter:retweets`,
   `(song OR "music video") (agi OR singularity OR superintelligence OR "ai safety" OR alignment OR "ai bubble" OR "p(doom)" OR "pace the frontier") filter:videos min_faves:25 -filter:retweets`,
 ];
