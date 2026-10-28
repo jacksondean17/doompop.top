@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 const ERRORS: Record<string, string> = {
   bad_url: "That link doesn't look right.",
@@ -12,6 +12,40 @@ const ERRORS: Record<string, string> = {
 export default function SubmitPage() {
   const [state, setState] = useState<{ ok?: boolean; msg?: string }>({});
   const [busy, setBusy] = useState(false);
+  const [title, setTitle] = useState("");
+  const [artist, setArtist] = useState("");
+  const [fetching, setFetching] = useState(false);
+  const touched = useRef({ title: false, artist: false });
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const lastUrl = useRef("");
+  const pasted = useRef(false);
+  const reqId = useRef(0);
+
+  useEffect(() => () => clearTimeout(timer.current), []);
+
+  async function lookup(url: string) {
+    url = url.trim();
+    if (!/^https?:\/\/[^\s/]+\.[^\s]+/i.test(url) || url === lastUrl.current) return;
+    lastUrl.current = url;
+    const id = ++reqId.current;
+    setFetching(true);
+    try {
+      const r = await fetch(`/api/preview?url=${encodeURIComponent(url)}`);
+      const d = await r.json();
+      if (id !== reqId.current) return;
+      if (d.title && !touched.current.title) setTitle(String(d.title).slice(0, 120));
+      if (d.artist && !touched.current.artist) setArtist(String(d.artist).slice(0, 80));
+    } catch {
+      // preview is a nicety; ignore
+    } finally {
+      if (id === reqId.current) setFetching(false);
+    }
+  }
+
+  function schedule(url: string, delay: number) {
+    clearTimeout(timer.current);
+    timer.current = setTimeout(() => lookup(url), delay);
+  }
 
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -26,6 +60,13 @@ export default function SubmitPage() {
       const d = await r.json();
       if (r.ok) {
         form.reset();
+        clearTimeout(timer.current);
+        reqId.current++;
+        lastUrl.current = "";
+        touched.current = { title: false, artist: false };
+        setTitle("");
+        setArtist("");
+        setFetching(false);
         setState({ ok: true, msg: "Received. A human will check it's actually doom pop, then it hits the chart." });
       } else {
         setState({ ok: false, msg: ERRORS[d.error] ?? "Something broke." });
@@ -52,15 +93,44 @@ export default function SubmitPage() {
       <form className="stack" onSubmit={onSubmit}>
         <label>
           Link
-          <input name="url" type="url" required placeholder="https://suno.com/song/…" />
+          <input
+            name="url"
+            type="url"
+            required
+            placeholder="https://suno.com/song/…"
+            onChange={(e) => {
+              schedule(e.target.value, pasted.current ? 0 : 400);
+              pasted.current = false;
+            }}
+            onPaste={() => (pasted.current = true)}
+          />
+          {fetching && <span className="hint">Fetching details…</span>}
         </label>
         <label>
           Title
-          <input name="title" required maxLength={120} placeholder="Hit the Brakes" />
+          <input
+            name="title"
+            required
+            maxLength={120}
+            placeholder="Hit the Brakes"
+            value={title}
+            onChange={(e) => {
+              touched.current.title = e.target.value !== "";
+              setTitle(e.target.value);
+            }}
+          />
         </label>
         <label>
           Artist / creator (optional)
-          <input name="artist" maxLength={80} />
+          <input
+            name="artist"
+            maxLength={80}
+            value={artist}
+            onChange={(e) => {
+              touched.current.artist = e.target.value !== "";
+              setArtist(e.target.value);
+            }}
+          />
         </label>
         <label>
           Your name (optional)
