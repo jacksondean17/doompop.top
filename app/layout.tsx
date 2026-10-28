@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { Analytics } from "@vercel/analytics/next";
 import MiniPlayer from "@/components/MiniPlayer";
 import Nav from "@/components/Nav";
 import VoteBar from "@/components/VoteBar";
@@ -48,6 +49,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         </footer>
         <MiniPlayer />
         <VoteBar />
+        <Analytics />
       </body>
     </html>
   );
