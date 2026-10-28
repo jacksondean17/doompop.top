@@ -363,6 +363,11 @@ export default async function Home({ searchParams }: { searchParams: Promise<Raw
           />
         </ol>
       )}
+      {songs.length > 0 && !noAgentVotes && (
+        <p className="see-all">
+          <a href="/songs">See all {totals ? `${totals.songs.toLocaleString("en-US")} ` : ""}songs &rarr;</a>
+        </p>
+      )}
     </>
   );
 }

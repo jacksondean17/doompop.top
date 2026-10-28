@@ -256,6 +256,41 @@ export async function leaderboard(f: ChartFilters = {}): Promise<Song[]> {
   return withVideos(rows);
 }
 
+export type CatalogueSort = "rating" | "agent" | "views" | "games" | "winpct" | "new" | "title";
+export type SortDir = "asc" | "desc";
+export type CatalogueFilters = { sort?: CatalogueSort; dir?: SortDir; q?: string; scene?: Scene; page?: number; perPage?: number };
+
+const CATALOGUE_ORDER: Record<CatalogueSort, string> = {
+  rating: "s.rating",
+  agent: "s.agent_rating",
+  views: "s.views",
+  games: "(s.wins + s.losses)",
+  winpct: "s.wins::float8 / NULLIF(s.wins + s.losses, 0)",
+  new: "COALESCE(s.released_at, s.submitted_at)",
+  title: "lower(s.title)",
+};
+
+// Every approved song, one page at a time. `page` comes back clamped to the pages that exist.
+export async function catalogue(f: CatalogueFilters = {}): Promise<{ songs: Song[]; total: number; page: number }> {
+  const q = await db();
+  const sort = f.sort && f.sort in CATALOGUE_ORDER ? f.sort : "rating";
+  const dir = f.dir === "asc" ? "ASC" : "DESC";
+  const per = Math.min(200, Math.max(1, Math.floor(f.perPage ?? 50)));
+  const search = f.q?.trim() ? `%${f.q.trim().replace(/[%_\\]/g, "\\$&")}%` : null;
+  const where = () => q`
+    s.status = 'approved'
+    ${f.scene ? q`AND s.scene = ${f.scene}` : q``}
+    ${search ? q`AND (s.title ILIKE ${search} OR s.artist ILIKE ${search}
+      OR EXISTS (SELECT 1 FROM videos v WHERE v.song_id = s.id AND (v.title ILIKE ${search} OR v.artist ILIKE ${search})))` : q``}`;
+  const [{ n: total }] = (await q`SELECT count(*)::int AS n FROM songs s WHERE ${where()}`) as { n: number }[];
+  const page = Math.min(Math.max(1, Math.floor(f.page ?? 1)), Math.max(1, Math.ceil(total / per)));
+  const rows = (await q`
+    SELECT ${SONG_COLS!} FROM songs s WHERE ${where()}
+    ORDER BY ${q.unsafe(`${CATALOGUE_ORDER[sort]} ${dir} NULLS LAST, s.rating DESC, s.id ASC`)}
+    LIMIT ${per} OFFSET ${(page - 1) * per}`) as Omit<Song, "videos">[];
+  return { songs: await withVideos(rows), total, page };
+}
+
 // Matchups lean toward songs that have been played less and toward songs with more reach,
 // so a first-time voter meets the big songs first; the opponent is nearby in rating.
 // `exclude` holds songs this visitor just saw; pairs they already voted on are never served again.

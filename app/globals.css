@@ -260,6 +260,9 @@ input:hover, textarea:hover { border-color: #3d3b36; }
   .search input { max-width: none; flex: 1; min-width: 0; }
 }
 
+@media (max-width: 520px) {
+  .nav a.nav-agents { display: none; }
+}
 @media (max-width: 460px) {
   .logo { font-size: 20px; }
   .nav { gap: 2px; }
@@ -524,4 +527,58 @@ input:hover, textarea:hover { border-color: #3d3b36; }
   .an-scenes tbody th { font-size: 16px; padding-left: 8px; }
   .an-rate { width: 32px; margin-right: 6px; }
   .an-g { display: none; }
+}
+
+/* Songs: the full catalogue */
+.hero-songs { padding-bottom: 8px; }
+.hero-songs h1 { font-size: clamp(48px, 8vw, 96px); }
+.cat-sort { display: none; }
+.cat-count { margin: 2px 0 0; font-size: 12px; color: var(--dim); letter-spacing: .04em; overflow-wrap: anywhere; }
+.cat-count b { color: var(--ink); }
+.cat { width: 100%; border-collapse: collapse; margin: 8px 0 0; font-size: 13px; border-top: 2px solid var(--ink); font-variant-numeric: tabular-nums; }
+.cat th, .cat td { padding: 7px 8px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; font-weight: 400; }
+.cat thead th { font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: var(--dim); padding-top: 10px; padding-bottom: 10px; }
+.cat thead a { display: inline-flex; gap: 4px; text-decoration: none; }
+.cat thead a:hover, .cat thead a.on { color: var(--acid); }
+.cat-ind { opacity: .4; }
+.cat thead a.on .cat-ind { opacity: 1; }
+.cat tbody tr { border-left: 3px solid var(--scene); transition: background .15s; }
+.cat tbody tr:hover { background: rgba(236, 230, 217, .035); }
+.cat .c-rank { width: 48px; text-align: center; font-family: var(--display); font-size: 18px; color: var(--dim); }
+.cat .c-song { text-align: left; white-space: normal; width: 100%; min-width: 220px; }
+.c-title { font-family: var(--display); font-size: 17px; line-height: 1.15; letter-spacing: .01em; text-transform: uppercase; text-decoration: none; overflow-wrap: anywhere; }
+.c-title:hover { color: var(--acid); }
+.c-artist { margin-left: 10px; font-size: 12px; color: var(--dim); }
+.cat .badge { margin-left: 8px; vertical-align: 1px; }
+.cat .c-on { text-align: left; font-size: 11px; letter-spacing: .04em; color: var(--dim); }
+.cat .c-elo { color: var(--ink); font-weight: 700; }
+.cat .c-agent, .cat .c-pct, .cat .c-date, .cat .c-ver { color: var(--dim); }
+.cat td.on { color: var(--acid); }
+.pager { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 20px 0 0; }
+.pager .chip { min-width: 34px; text-align: center; }
+.pager .chip.off { opacity: .35; cursor: default; }
+.pager .chip.off:hover { color: var(--dim); border-color: var(--line); }
+.pager-gap { color: var(--dim); padding: 0 2px; }
+.see-all { margin: -40px 0 64px; text-align: right; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; }
+.see-all a { color: var(--acid); text-decoration: none; }
+.see-all a:hover { color: var(--ink); }
+
+@media (max-width: 1000px) {
+  .cat .c-on, .cat .c-ver { display: none; }
+}
+@media (max-width: 760px) {
+  .cat-sort { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+  .cat-sort .chips { display: contents; }
+  .cat, .cat tbody { display: block; }
+  .cat thead { display: none; }
+  .cat tbody tr { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; position: relative; padding: 8px 8px 9px 42px; border-bottom: 1px solid var(--line); }
+  .cat th, .cat td { display: block; padding: 0; border: 0; text-align: left; font-size: 12px; }
+  .cat .c-rank { position: absolute; left: 0; top: 7px; width: 40px; font-size: 18px; }
+  .cat .c-song { flex-basis: 100%; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .c-title { font-size: 16px; }
+  .c-artist { margin-left: 8px; }
+  .cat td[data-l]::before { content: attr(data-l) " "; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); font-weight: 400; }
+  .cat td.c-on, .cat td.c-pct, .cat td.c-date, .cat td.c-ver { display: none; }
+  .cat td.on { display: block; }
+  .see-all { margin-top: -48px; text-align: left; }
 }
