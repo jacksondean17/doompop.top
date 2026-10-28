@@ -3,6 +3,7 @@ import { usePathname } from "next/navigation";
 
 const LINKS = [
   ["/", "Chart"],
+  ["/agents", "Agents"],
   ["/submit", "Submit"],
 ] as const;
 
