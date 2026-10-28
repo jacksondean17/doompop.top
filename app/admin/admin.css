@@ -8,6 +8,15 @@
 .adm-fields > * { min-width: 0; }
 .adm-hint { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; border: 1px dashed var(--acid); color: var(--acid); padding: 8px 10px; font-size: 13px; }
 .adm-hint .btn.ghost { padding: 4px 10px; font-size: 12px; color: var(--acid); border-color: var(--acid); }
+.adm-hint > span { flex: 1 1 260px; min-width: 0; overflow-wrap: anywhere; }
+.adm-dim { color: var(--dim); }
+.adm-find { display: grid; gap: 10px; margin-bottom: 16px; }
+.adm-pairs { display: grid; gap: 10px; margin-bottom: 20px; }
+.adm-pairs h2 { margin: 0; font-size: 18px; }
+.adm-pair { border: 1px dashed var(--acid); padding: 10px 12px; display: grid; gap: 6px; overflow-wrap: anywhere; }
+.adm-pair .btn.ghost { padding: 4px 10px; font-size: 12px; }
+.adm-arrow { color: var(--acid); }
+.adm-pairs-link { font: inherit; font-size: 13px; color: var(--acid); background: transparent; border: 1px dashed var(--acid); padding: 6px 10px; margin-bottom: 12px; cursor: pointer; justify-self: start; }
 .adm-videos { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
 .adm-videos li { border-left: 2px solid var(--line); padding-left: 10px; display: grid; gap: 6px; min-width: 0; }
 .adm-videos li:first-child { border-left-color: var(--acid); }

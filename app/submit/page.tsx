@@ -67,7 +67,14 @@ export default function SubmitPage() {
         setTitle("");
         setArtist("");
         setFetching(false);
-        setState({ ok: true, msg: "Received. A human will check it's actually doom pop, then it hits the chart." });
+        setState({
+          ok: true,
+          msg: d.dupe
+            ? `Received. Looks like this might be “${d.dupe.title}”${d.dupe.artist ? ` by ${d.dupe.artist}` : ""}, already ${
+                d.dupe.onChart ? "on the chart" : "in the queue"
+              }. We'll link it as another version once an admin checks.`
+            : "Received. A human will check it's actually doom pop, then it hits the chart.",
+        });
       } else {
         setState({ ok: false, msg: ERRORS[d.error] ?? "Something broke." });
       }
