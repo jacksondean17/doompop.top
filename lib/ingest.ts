@@ -1,4 +1,4 @@
-import { addCandidate, claimIngestRun } from "./db";
+import { addCandidate, claimIngestRun, saveVideoStats, staleVideos, type Scene } from "./db";
 import { guessTitle } from "./preview";
 
 // Finds fresh doom pop on X (via twitterapi.io) and YouTube, and drops it in the moderation queue.
@@ -23,7 +23,34 @@ const MIN_INTERVAL_SECONDS = 50 * 60;
 // Posts need time to collect likes before min_faves lets them through, so look back two days.
 const LOOKBACK_SECONDS = 48 * 60 * 60;
 
-type Found = { url: string; title: string; artist: string | null; note: string | null };
+type Found = {
+  url: string;
+  title: string;
+  artist: string | null;
+  note: string | null;
+  scene?: Scene | null;
+  views?: number | null;
+  likes?: number | null;
+  postedAt?: string | null;
+};
+
+type XTweet = {
+  id: string;
+  text?: string;
+  createdAt?: string;
+  likeCount?: number;
+  viewCount?: number;
+  author?: { userName?: string };
+};
+
+export function sceneFor(text: string): Scene | null {
+  if (/claudia|anabology/i.test(text)) return "claudia";
+  if (/clawd|claude[- ]pop|p\(doom\)/i.test(text)) return "claude-pop";
+  if (/slopcore/i.test(text)) return "slopcore";
+  return null;
+}
+
+const toDate = (s?: string) => (s && !Number.isNaN(Date.parse(s)) ? new Date(s).toISOString() : null);
 type QueryLog = { source: string; query: string; status: number | string; results: number; error?: string };
 
 function firstLine(text: string, max = 80): string {
@@ -51,7 +78,7 @@ async function searchX(key: string, log: QueryLog[], lookback: number): Promise<
       continue;
     }
     const d = (await r.json()) as {
-      tweets?: { id: string; url?: string; text?: string; author?: { userName?: string } }[];
+      tweets?: XTweet[];
     };
     log.push({ source: "x", query: q, status: r.status, results: d.tweets?.length ?? 0 });
     for (const t of d.tweets ?? []) {
@@ -62,6 +89,10 @@ async function searchX(key: string, log: QueryLog[], lookback: number): Promise<
         title: guessTitle(t.text ?? "") ?? "Untitled",
         artist: `@${handle}`,
         note: (t.text ?? "").slice(0, 500) || null,
+        scene: sceneFor(`${t.text ?? ""} ${handle}`),
+        views: t.viewCount ?? null,
+        likes: t.likeCount ?? null,
+        postedAt: toDate(t.createdAt),
       });
     }
   }
@@ -115,6 +146,30 @@ function decodeEntities(s: string): string {
     .replace(/&gt;/g, ">");
 }
 
+// Keeps view and like counts current so the chart's reach head start tracks reality.
+async function refreshXStats(key: string, log: QueryLog[]): Promise<number> {
+  const stale = await staleVideos("x", 20, 100);
+  if (!stale.length) return 0;
+  const url = new URL("https://api.twitterapi.io/twitter/tweets");
+  url.searchParams.set("tweet_ids", stale.map((v) => v.embed_id).join(","));
+  const r = await fetch(url, { headers: { "X-API-Key": key } });
+  if (!r.ok) {
+    log.push({ source: "x-stats", query: `${stale.length} ids`, status: r.status, results: 0, error: (await r.text()).slice(0, 200) });
+    return 0;
+  }
+  const d = (await r.json()) as { tweets?: XTweet[] };
+  const byId = new Map((d.tweets ?? []).map((t) => [t.id, t]));
+  // Missing tweets (deleted or private) still get stamped so they aren't retried every run.
+  await saveVideoStats(
+    stale.map((v) => {
+      const t = byId.get(v.embed_id);
+      return { id: v.id, views: t?.viewCount ?? null, likes: t?.likeCount ?? null, postedAt: toDate(t?.createdAt) };
+    }),
+  );
+  log.push({ source: "x-stats", query: `${stale.length} ids`, status: r.status, results: byId.size });
+  return byId.size;
+}
+
 export type IngestResult =
   | { skipped: "too_soon" | "no_sources" }
   | { found: number; added: number; sources: string[]; queries: QueryLog[] };
@@ -136,6 +191,8 @@ export async function runIngest(force = false, lookback = LOOKBACK_SECONDS): Pro
   };
   if (xKey) {
     sources.push("x");
+    await refreshXStats(xKey, queries).catch(failed("x-stats"));
+    await sleep(X_SPACING_MS);
     found.push(...(await searchX(xKey, queries, lookback).catch(failed("x"))));
   }
   if (ytKey) {

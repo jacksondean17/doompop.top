@@ -2,10 +2,18 @@
 
 The Doom 100: AI-made songs about AI doom, ranked by Elo through head-to-head votes.
 
-- `/`: the chart
+- `/`: the chart, filterable by sort (rating, views, hot this week, newest), time window, scene, and search
 - `/vote`: two songs, pick the one that slaps (Elo, K=32, start 1500)
 - `/submit`: anyone can submit a link (X, YouTube, Suno, SoundCloud, Spotify, TikTok, or any URL)
-- `/admin`: approve or reject submissions and fix titles (needs the admin key)
+- `/admin`: approve or reject submissions, fix titles, set scenes, and merge a new video of an existing song into that song (needs the admin key)
+
+## Songs, videos and the head start
+
+The chart ranks **songs**. A song can have several videos (remakes, fan versions); its card shows them all, most-viewed first, and votes count for the song.
+
+Each song starts with a head start from its total views across those videos: 10k views is neutral, 1M is +120 Elo, 10M is +180 (capped at -120 and +200). Votes move the rating from there. When view counts change, the rating moves by the change in head start, so earned votes are never lost. Matchups also lean toward high-reach and less-played songs, so a first-time voter meets the big songs first. The formula is `priorFor()` in `lib/db.ts`.
+
+The bot refreshes X view and like counts about once a day.
 
 ## Running it
 
