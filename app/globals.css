@@ -306,14 +306,13 @@ input:hover, textarea:hover { border-color: #3d3b36; }
 .mini-title { flex: 1; min-width: 0; display: grid; font-size: 12px; }
 .mini-title b { font-family: var(--display); font-weight: 400; font-size: 18px; text-transform: uppercase; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mini-title span { color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mini-body { max-height: min(60vh, 420px); overflow: auto; }
+.mini-body .embed { min-height: 0; }
+.mini-body .sp-video { max-height: 240px; }
 .mini-out, .mini-close { flex: none; display: grid; place-items: center; width: 32px; height: 32px; color: var(--ink); background: none; border: 1px solid var(--line); text-decoration: none; font: inherit; cursor: pointer; }
 .mini-out:hover, .mini-close:hover { border-color: var(--acid); color: var(--acid); }
-.mini-video { display: block; width: 100%; max-height: 240px; background: #000; }
-.mini-embed { max-height: 320px; overflow: auto; }
-.mini-embed .embed { min-height: 0; }
 @media (max-width: 680px) {
   .mini { right: 8px; left: 8px; width: auto; bottom: calc(76px + env(safe-area-inset-bottom)); box-shadow: 4px 4px 0 var(--blood); }
-  .mini-video { max-height: 200px; }
 }
 
 /* Chart: humans vs agents */
@@ -525,3 +524,13 @@ input:hover, textarea:hover { border-color: #3d3b36; }
   .an-rate { width: 32px; margin-right: 6px; }
   .an-g { display: none; }
 }
+
+/* A song's player: falls through its versions until one plays */
+.song-player { display: grid; gap: 8px; }
+.sp-video { display: block; width: 100%; max-height: min(70vh, 720px); background: #000; }
+.song-player .embed-youtube iframe { height: auto; aspect-ratio: 16 / 9; }
+.sp-note { margin: 0; padding: 0 10px; font-size: 12px; color: var(--amber); }
+.sp-versions { padding: 0 10px 10px; }
+.sp-dead { display: grid; gap: 8px; padding: 16px; font-size: 13px; color: var(--dim); }
+.sp-dead b { color: var(--ink); }
+.sp-outs { display: flex; flex-wrap: wrap; gap: 8px; }

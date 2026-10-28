@@ -38,3 +38,4 @@
 .adm-hook { display: grid; gap: 8px; margin: 8px 0; }
 .adm-hook video { width: 100%; max-height: 360px; background: #000; }
 .adm-hook input { width: 6em; }
+.adm-fail { color: var(--blood); }

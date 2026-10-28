@@ -324,6 +324,11 @@ function VideoItem({ video: v, first, many, post }: { video: Video; first: boole
         <a href={v.url} target="_blank" rel="noreferrer">
           {v.url.replace(/^https?:\/\/(www\.)?/, "")}
         </a>
+        {!!v.play_fails && (
+          <span className="adm-fail" title="Reported by visitors' players">
+            ⚠ didn&apos;t play {v.play_fails}× ({v.play_fail_reason})
+          </span>
+        )}
       </div>
       <div className="acts">
         <button className="btn ghost" onClick={() => setOpen(!open)}>
