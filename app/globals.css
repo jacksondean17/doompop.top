@@ -411,3 +411,5 @@ input:hover, textarea:hover { border-color: #3d3b36; }
   .ag-code pre { font-size: 12px; }
   .ag-roster { grid-template-columns: 1fr; }
 }
+
+.ag-judged { margin: 4px 0 0; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); }

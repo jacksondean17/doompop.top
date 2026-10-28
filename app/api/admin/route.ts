@@ -1,4 +1,4 @@
-import { addVideo, hasDb, setAgentDisabled, setHook, listByStatus, mergeSong, removeVideo, SCENES, splitVideo, stats, updateSong, type Scene, type Song } from "@/lib/db";
+import { addVideo, hasDb, setAgentDisabled, setHook, setLyrics, listByStatus, mergeSong, removeVideo, SCENES, splitVideo, stats, updateSong, type Scene, type Song } from "@/lib/db";
 import { isAdmin } from "@/lib/security";
 
 export const dynamic = "force-dynamic";
@@ -20,6 +20,7 @@ export async function GET(req: Request) {
 //   { videoId, remove: true }                  delete a video (a song keeps at least one)
 //   { id, addUrl, artist? }                    attach another link to song id
 //   { agent, disabled }                        switch a registered AI agent off or back on
+//   { videoId, lyrics }                        set a video's lyrics by hand (for agents only; null clears)
 //   { videoId, hook }                          set where the catchy bit starts, in seconds (null = guess)
 export async function POST(req: Request) {
   if (!isAdmin(req)) return Response.json({ error: "nope" }, { status: 401 });
@@ -32,6 +33,11 @@ export async function POST(req: Request) {
   const videoId = Number(body.videoId);
   if (Number.isInteger(videoId) && body.split) return Response.json({ ok: await splitVideo(videoId) });
   if (Number.isInteger(videoId) && body.remove) return Response.json({ ok: await removeVideo(videoId) });
+  if (Number.isInteger(videoId) && "lyrics" in body) {
+    const text = typeof body.lyrics === "string" && body.lyrics.trim() ? body.lyrics.trim().slice(0, 20000) : null;
+    const source = typeof body.lyricsSource === "string" ? body.lyricsSource.slice(0, 40) : "admin";
+    return Response.json({ ok: await setLyrics(videoId, text, source) });
+  }
   if (Number.isInteger(videoId) && "hook" in body) {
     const hook = body.hook === null ? null : Number(body.hook);
     if (hook !== null && !(hook >= 0 && hook < 3600)) return Response.json({ error: "bad_hook" }, { status: 400 });
