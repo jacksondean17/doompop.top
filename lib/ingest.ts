@@ -21,10 +21,15 @@ function firstLine(text: string, max = 80): string {
   return line.length > max ? `${line.slice(0, max - 1)}…` : line || "Untitled";
 }
 
-async function searchX(key: string, log: QueryLog[]): Promise<Found[]> {
-  const since = Math.floor(Date.now() / 1000) - LOOKBACK_SECONDS;
+// twitterapi.io's free tier allows one request per 5 seconds.
+const X_SPACING_MS = 5500;
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+async function searchX(key: string, log: QueryLog[], lookback: number): Promise<Found[]> {
+  const since = Math.floor(Date.now() / 1000) - lookback;
   const out: Found[] = [];
-  for (const q of X_QUERIES) {
+  for (const [i, q] of X_QUERIES.entries()) {
+    if (i > 0) await sleep(X_SPACING_MS);
     const url = new URL("https://api.twitterapi.io/twitter/tweet/advanced_search");
     url.searchParams.set("query", `${q} since_time:${since}`);
     url.searchParams.set("queryType", "Latest");
@@ -104,7 +109,7 @@ export type IngestResult =
   | { skipped: "too_soon" | "no_sources" }
   | { found: number; added: number; sources: string[]; queries: QueryLog[] };
 
-export async function runIngest(force = false): Promise<IngestResult> {
+export async function runIngest(force = false, lookback = LOOKBACK_SECONDS): Promise<IngestResult> {
   const xKey = process.env.TWITTERAPI_IO_KEY;
   const ytKey = process.env.YOUTUBE_API_KEY;
   if (!xKey && !ytKey) return { skipped: "no_sources" };
@@ -121,7 +126,7 @@ export async function runIngest(force = false): Promise<IngestResult> {
   };
   if (xKey) {
     sources.push("x");
-    found.push(...(await searchX(xKey, queries).catch(failed("x"))));
+    found.push(...(await searchX(xKey, queries, lookback).catch(failed("x"))));
   }
   if (ytKey) {
     sources.push("youtube");
