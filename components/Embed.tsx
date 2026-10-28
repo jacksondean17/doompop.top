@@ -77,7 +77,7 @@ export default function Embed({
     );
   }
   return (
-    <div className="embed">
+    <div className={`embed embed-${platform}`}>
       <iframe
         src={src}
         height={HEIGHTS[platform] ?? 240}
