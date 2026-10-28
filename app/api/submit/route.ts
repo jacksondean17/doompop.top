@@ -15,7 +15,7 @@ export async function POST(req: Request) {
   if ((await recentSubmissionCount(hash, 3600)) >= 10) {
     return Response.json({ error: "slow_down" }, { status: 429 });
   }
-  const result = await submitSong({
+  const { result, dupe } = await submitSong({
     url,
     title,
     artist: clip(body?.artist, 80),
@@ -25,5 +25,5 @@ export async function POST(req: Request) {
   });
   if (result === "invalid") return Response.json({ error: "bad_url" }, { status: 400 });
   if (result === "duplicate") return Response.json({ error: "duplicate" }, { status: 409 });
-  return Response.json({ ok: true });
+  return Response.json({ ok: true, dupe: dupe && { title: dupe.title, artist: dupe.artist, onChart: dupe.status === "approved" } });
 }

@@ -1,41 +1,53 @@
 "use client";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Embed from "@/components/Embed";
-import type { Scene, Song, Video } from "@/lib/db";
+import type { DupeMatch, DupePair, Scene, Song, Video } from "@/lib/db";
 import "./admin.css";
 
 type Status = Song["status"];
 type Stats = { songs: number; votes: number; pending: number };
 type Post = (body: Record<string, unknown>) => Promise<Record<string, unknown> | null>;
+type Search = (q: string) => Promise<Song[]>;
 const KEY_STORE = "doompop-admin-key";
 // Mirrors SCENES in lib/db, which can't be imported client-side (it pulls in postgres).
 const SCENES: Record<Scene, string> = { claudia: "Claudia", slopcore: "Slopcore", "claude-pop": "Claude-Pop", other: "Other" };
 
 const compact = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
 const fmtViews = (n: number | null) => (n == null ? "?" : compact.format(n));
+const isUrl = (t: string) => /^https?:\/\//i.test(t.trim());
 
-// "Doom Song (Opus 5.5 video)!" -> "doom song"
-const norm = (t: string) =>
-  t
-    .toLowerCase()
-    .replace(/[([{][^)\]}]*[)\]}]/g, " ")
-    .replace(/[^\p{L}\p{N}\s]/gu, "")
-    .replace(/\s+/g, " ")
-    .trim();
+// Runs a search a moment after the text stops changing, and again whenever `rev` bumps.
+function useSearch(search: Search, text: string, rev = 0): Song[] | null {
+  const [hits, setHits] = useState<Song[] | null>(null);
+  useEffect(() => {
+    if (!text.trim()) {
+      setHits(null);
+      return;
+    }
+    let live = true;
+    const t = setTimeout(() => search(text).then((s) => live && setHits(s)), 250);
+    return () => {
+      live = false;
+      clearTimeout(t);
+    };
+  }, [search, text, rev]);
+  return hits;
+}
 
 export default function AdminPage() {
   const [key, setKey] = useState("");
   const [authed, setAuthed] = useState(false);
   const [tab, setTab] = useState<Status>("pending");
   const [songs, setSongs] = useState<Song[]>([]);
-  const [approved, setApproved] = useState<Song[]>([]);
+  const [hints, setHints] = useState<Record<number, DupeMatch[]>>({});
+  const [pairs, setPairs] = useState<DupePair[]>([]);
+  const [rev, setRev] = useState(0); // bumps after every load so open searches refresh too
   const [stats, setStats] = useState<Stats | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
 
   const load = useCallback(async (k: string, status: Status) => {
-    const get = (s: Status) => fetch(`/api/admin?status=${s}`, { headers: { "x-admin-key": k }, cache: "no-store" });
-    const r = await get(status);
+    const r = await fetch(`/api/admin?status=${status}`, { headers: { "x-admin-key": k }, cache: "no-store" });
     if (r.status === 401) {
       setAuthed(false);
       setError("Wrong key.");
@@ -50,15 +62,27 @@ export default function AdminPage() {
     setAuthed(true);
     setSongs(d.songs);
     setStats(d.stats);
+    setHints(d.hints ?? {});
+    setPairs(d.pairs ?? []);
+    setRev((n) => n + 1);
     try {
       localStorage.setItem(KEY_STORE, k);
     } catch {}
-    if (status === "approved") setApproved(d.songs);
-    else {
-      const a = await get("approved");
-      if (a.ok) setApproved((await a.json()).songs);
-    }
   }, []);
+
+  const search: Search = useCallback(
+    async (q) => {
+      const r = await fetch(`/api/admin?q=${encodeURIComponent(q)}`, { headers: { "x-admin-key": key }, cache: "no-store" });
+      return r.ok ? (await r.json()).songs : [];
+    },
+    [key],
+  );
+
+  const switchTab = (s: Status) => {
+    setTab(s);
+    setFlash(null);
+    load(key, s);
+  };
 
   useEffect(() => {
     try {
@@ -119,30 +143,90 @@ export default function AdminPage() {
       </section>
       <div className="adm-tabs">
         {(["pending", "approved", "rejected"] as Status[]).map((s) => (
-          <button
-            key={s}
-            className={`btn ghost${tab === s ? " on" : ""}`}
-            onClick={() => {
-              setTab(s);
-              setFlash(null);
-              load(key, s);
-            }}
-          >
+          <button key={s} className={`btn ghost${tab === s ? " on" : ""}`} onClick={() => switchTab(s)}>
             {s}
           </button>
         ))}
       </div>
       {error && <div className="msg err">{error}</div>}
       {flash && <div className="msg err">{flash}</div>}
+      <Finder search={search} rev={rev} post={post} />
+      {tab === "approved" ? (
+        <Pairs pairs={pairs} post={post} />
+      ) : (
+        pairs.length > 0 && (
+          <button className="adm-pairs-link" onClick={() => switchTab("approved")}>
+            {pairs.length} possible duplicate{pairs.length === 1 ? "" : "s"} on the chart →
+          </button>
+        )
+      )}
       {songs.length === 0 && <div className="empty">Nothing here.</div>}
       {songs.map((s) => (
-        <AdminRow key={s.id} song={s} approved={approved} post={post} />
+        <AdminRow key={s.id} song={s} hints={hints[s.id]} post={post} search={search} />
       ))}
     </div>
   );
 }
 
-function AdminRow({ song, approved, post }: { song: Song; approved: Song[]; post: Post }) {
+const who = (m: DupeMatch) => `${m.artist ? `${m.artist} · ` : ""}${m.status} · ${m.votes} votes · ${Math.round(m.rating)}`;
+
+// Finds any song by title, artist or link, with the full row so it can be merged or given a link.
+function Finder({ search, rev, post }: { search: Search; rev: number; post: Post }) {
+  const [text, setText] = useState("");
+  const hits = useSearch(search, text, rev);
+  return (
+    <div className="adm-find">
+      <input value={text} onChange={(e) => setText(e.target.value)} placeholder="Find any song by title, artist or link" aria-label="Find a song" />
+      {hits && hits.length === 0 && (
+        <div className="artist">
+          {isUrl(text) ? "No song has this link yet. Find the song by title and use its Add link box." : "No match."}
+        </div>
+      )}
+      {hits && hits.length > 0 && isUrl(text) && <div className="artist">This link is already on:</div>}
+      {hits?.map((s) => (
+        <AdminRow key={s.id} song={s} post={post} search={search} />
+      ))}
+    </div>
+  );
+}
+
+// Likely duplicates among approved songs, merged into whichever has more votes (then rating).
+function Pairs({ pairs, post }: { pairs: DupePair[]; post: Post }) {
+  if (!pairs.length) return null;
+  const merge = (from: DupeMatch, into: DupeMatch) =>
+    confirm(`Merge "${from.title}" into "${into.title}"? Its videos and votes move over and "${from.title}" goes away.`) &&
+    post({ id: from.id, mergeInto: into.id });
+  return (
+    <section className="adm-pairs">
+      <h2>Possible duplicates</h2>
+      {pairs.map(({ from, into, score, reasons }) => (
+        <div key={`${from.id}:${into.id}`} className="adm-pair">
+          <div>
+            <b>{from.title}</b> <span className="artist">({who(from)})</span>
+            <span className="adm-arrow"> → into </span>
+            <b>{into.title}</b> <span className="artist">({who(into)})</span>
+          </div>
+          <div className="artist">
+            {reasons.join(", ")} · score {score.toFixed(2)}
+          </div>
+          <div className="acts">
+            <button className="btn ghost" onClick={() => merge(from, into)}>
+              Merge →
+            </button>
+            <button className="btn ghost" onClick={() => merge(into, from)}>
+              Merge the other way
+            </button>
+            <button className="btn ghost" onClick={() => post({ id: from.id, notDupeOf: into.id })}>
+              Not the same
+            </button>
+          </div>
+        </div>
+      ))}
+    </section>
+  );
+}
+
+function AdminRow({ song, hints, post, search }: { song: Song; hints?: DupeMatch[]; post: Post; search: Search }) {
   const [title, setTitle] = useState(song.title);
   const [artist, setArtist] = useState(song.artist ?? "");
   const [scene, setScene] = useState<Scene | "">(song.scene ?? "");
@@ -150,14 +234,7 @@ function AdminRow({ song, approved, post }: { song: Song; approved: Song[]; post
   const dirty = title !== song.title || artist !== (song.artist ?? "") || scene !== (song.scene ?? "");
   const act = (body: Record<string, unknown>) => post({ id: song.id, ...body });
 
-  const lookalike = useMemo(() => {
-    if (song.status !== "pending") return null;
-    const me = norm(song.title);
-    if (!me) return null;
-    return approved.find((a) => a.id !== song.id && (norm(a.title) === me || norm(a.title).includes(me))) ?? null;
-  }, [song, approved]);
-
-  const mergeInto = (target: Song) => {
+  const mergeInto = (target: { id: number; title: string }) => {
     if (confirm(`Merge "${song.title}" into "${target.title}"? Its videos and votes move over and this entry goes away.`)) {
       act({ mergeInto: target.id });
     }
@@ -182,14 +259,24 @@ function AdminRow({ song, approved, post }: { song: Song; approved: Song[]; post
         {song.submitted_by && ` · from ${song.submitted_by}`}
       </div>
       {song.note && <div className="artist">“{song.note}”</div>}
-      {lookalike && (
-        <div className="adm-hint">
-          Looks like: <b>{lookalike.title}</b>
-          <button className="btn ghost" onClick={() => mergeInto(lookalike)}>
-            Merge?
+      {hints?.map((h) => (
+        <div key={h.id} className="adm-hint">
+          <span>
+            Looks like: <b>{h.title}</b> <span className="adm-dim">({who(h)})</span>
+            <br />
+            <span className="adm-dim">
+              {h.reasons.join(", ")}
+              {h.score > 0 && ` · score ${h.score.toFixed(2)}`}
+            </span>
+          </span>
+          <button className="btn ghost" onClick={() => mergeInto(h)}>
+            Merge into this
+          </button>
+          <button className="btn ghost" onClick={() => act({ notDupeOf: h.id })}>
+            Not the same
           </button>
         </div>
-      )}
+      ))}
       <ul className="adm-videos">
         {song.videos.map((v, i) => (
           <VideoItem key={v.id} video={v} first={i === 0} many={song.videos.length > 1} post={post} />
@@ -220,7 +307,7 @@ function AdminRow({ song, approved, post }: { song: Song; approved: Song[]; post
           Merge into…
         </button>
       </div>
-      {merging && <MergePicker song={song} approved={approved} onPick={mergeInto} />}
+      {merging && <MergePicker song={song} search={search} onPick={mergeInto} />}
       <AddLink onAdd={(url) => act({ addUrl: url })} />
     </div>
   );
@@ -303,23 +390,18 @@ function HookSetter({ video: v, post }: { video: Video; post: Post }) {
   );
 }
 
-function MergePicker({ song, approved, onPick }: { song: Song; approved: Song[]; onPick: (s: Song) => void }) {
+function MergePicker({ song, search, onPick }: { song: Song; search: Search; onPick: (s: Song) => void }) {
   const [q, setQ] = useState("");
-  const hits = useMemo(() => {
-    const n = norm(q);
-    return approved
-      .filter((a) => a.id !== song.id && (!n || norm(`${a.title} ${a.artist ?? ""}`).includes(n)))
-      .slice(0, 8);
-  }, [q, approved, song.id]);
+  const hits = useSearch(search, q)?.filter((a) => a.id !== song.id && a.status !== "rejected");
   return (
     <div className="adm-merge">
-      <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search approved songs" aria-label="Search approved songs" />
-      {hits.length === 0 && <div className="artist">No match.</div>}
-      {hits.map((a) => (
+      <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search songs by title, artist or link" aria-label="Search songs" />
+      {hits?.length === 0 && <div className="artist">No match.</div>}
+      {hits?.slice(0, 8).map((a) => (
         <button key={a.id} className="adm-pick" onClick={() => onPick(a)}>
           {a.title}
           <span className="artist">
-            {a.artist ?? "?"} · {fmtViews(a.views)} views · {a.videos.length} video{a.videos.length === 1 ? "" : "s"}
+            {a.artist ?? "?"} · {a.status} · {fmtViews(a.views)} views · {a.videos.map((v) => v.platform).join(", ")}
           </span>
         </button>
       ))}
