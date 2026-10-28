@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Nav from "@/components/Nav";
+import VoteBar from "@/components/VoteBar";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -22,7 +23,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body>
         <header className="top">
           <div className="wrap">
-            <a className="logo" href="/">
+            <a className="logo" href="/" aria-label="doompop.top, the chart">
               doompop<b>.top</b>
             </a>
             <Nav />
@@ -31,10 +32,17 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <main className="wrap">{children}</main>
         <footer className="foot">
           <div className="wrap">
-            Doom pop: AI-made songs about AI-made doom. Ratings are Elo (K=32, everyone starts at 1500). Not affiliated
-            with anyone, least of all the machines.
+            <p className="foot-cta">
+              The chart only moves when you vote. <a href="/vote">Judge a matchup</a> or{" "}
+              <a href="/submit">submit a song</a>.
+            </p>
+            <p>
+              Doom pop: AI-made songs about AI-made doom. Ratings are Elo (K=32, everyone starts at 1500). Not
+              affiliated with anyone, least of all the machines.
+            </p>
           </div>
         </footer>
+        <VoteBar />
       </body>
     </html>
   );
