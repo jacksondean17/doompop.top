@@ -27,7 +27,8 @@ const describe = (s: Song, media: Map<number, AgentMedia>, lyrics: Map<number, S
     platform: v.platform,
     mp4: v.media_url,
     audio: media.get(v.id)?.audio_url ?? null,
-    thumbnail: media.get(v.id)?.thumb_url ?? null,
+    thumbnail:
+      media.get(v.id)?.thumb_url ?? (v.platform === "youtube" ? `https://i.ytimg.com/vi/${v.embed_id}/hqdefault.jpg` : null),
     duration_s: v.duration_ms ? Math.round(v.duration_ms / 1000) : null,
     views: v.views,
   })),
