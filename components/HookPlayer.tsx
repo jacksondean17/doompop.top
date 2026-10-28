@@ -14,8 +14,19 @@ export function hookStart(v: Video): number {
 
 // Plays a video from its hook while `active`, pauses otherwise. Direct MP4s (X) get full control;
 // YouTube is restarted at the hook; anything else falls back to the plain embed.
-export default function HookPlayer({ video, active, onBlocked }: { video: Video; active: boolean; onBlocked: () => void }) {
+export default function HookPlayer({
+  video,
+  active,
+  onBlocked,
+  onUserPlay,
+}: {
+  video: Video;
+  active: boolean;
+  onBlocked: () => void;
+  onUserPlay: () => void; // the visitor pressed play on this player's own controls
+}) {
   const ref = useRef<HTMLVideoElement>(null);
+  const ours = useRef(false); // true while a play() we started is pending, to tell it apart from the visitor's
   const [muted, setMuted] = useState(false);
   const [broken, setBroken] = useState(false);
   const start = hookStart(video);
@@ -27,7 +38,9 @@ export default function HookPlayer({ video, active, onBlocked }: { video: Video;
       el.pause();
       return;
     }
+    if (!el.paused) return; // already playing because the visitor started it; leave their position alone
     if (Math.abs(el.currentTime - start) > 1 && el.currentTime < start + CLIP_SECONDS - 1) el.currentTime = start;
+    ours.current = true;
     el.play().catch(() => {
       // Sound blocked until the visitor interacts: play muted and ask for a tap.
       el.muted = true;
@@ -46,6 +59,10 @@ export default function HookPlayer({ video, active, onBlocked }: { video: Video;
           playsInline
           preload="metadata"
           onError={() => setBroken(true)}
+          onPlay={() => {
+            if (ours.current) ours.current = false;
+            else onUserPlay();
+          }}
         />
         {muted && active && (
           <button

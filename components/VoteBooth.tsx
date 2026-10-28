@@ -24,6 +24,7 @@ function SongCard({
   active,
   onPlay,
   onBlocked,
+  onUserPlay,
 }: {
   song: MatchSong;
   side: "A" | "B";
@@ -35,6 +36,7 @@ function SongCard({
   active: boolean;
   onPlay: () => void;
   onBlocked: () => void;
+  onUserPlay: () => void;
 }) {
   const [pick, setPick] = useState(0);
   const video = song.videos[pick] ?? song.videos[0];
@@ -74,7 +76,7 @@ function SongCard({
         </div>
       )}
       {video ? (
-        <HookPlayer key={video.id} video={video} active={active && !state} onBlocked={onBlocked} />
+        <HookPlayer key={video.id} video={video} active={active && !state} onBlocked={onBlocked} onUserPlay={onUserPlay} />
       ) : (
         <div className="embed" />
       )}
@@ -280,6 +282,12 @@ export default function VoteBooth({ scenes }: { scenes: Record<Scene, string> })
                     setPlaying(playing === i ? null : (i as 0 | 1));
                   }}
                   onBlocked={blocked}
+                  onUserPlay={() => {
+                    // Starting one side by hand pauses the other and ends the A-then-B sequence.
+                    setNeedsTap(false);
+                    setAuto(false);
+                    setPlaying(i as 0 | 1);
+                  }}
                 />
               </div>
             ))}
