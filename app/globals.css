@@ -269,9 +269,23 @@ input:hover, textarea:hover { border-color: #3d3b36; }
   .ticker-track { overflow-x: auto; }
 }
 
+/* The vote page spends the full window on the two players */
+body:has(.hero-vote) .wrap { max-width: 1560px; padding-inline: 24px; }
+.hero-vote { padding: 32px 0 8px; }
+.hero-vote h1 { font-size: clamp(48px, 7vw, 96px); }
+.card .embed-youtube iframe { height: auto; aspect-ratio: 16 / 9; }
+@media (min-width: 1100px) {
+  .hero-vote { display: grid; grid-template-columns: auto 1fr; align-items: end; column-gap: 40px; }
+  .hero-vote .kicker { grid-column: 1 / -1; }
+  .hero-vote .vote-how { margin: 0 0 8px; }
+}
+@media (max-width: 680px) {
+  body:has(.hero-vote) .wrap { padding-inline: 16px; }
+}
+
 /* Hook playback on the vote page */
 .hook-player { position: relative; display: block; }
-.hook-player video { width: 100%; display: block; max-height: 420px; background: #000; }
+.hook-player video { width: 100%; display: block; max-height: min(70vh, 760px); background: #000; }
 .hook-player .unmute { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); background: rgba(0, 0, 0, .75); }
 .play-chip { margin-top: 8px; }
 .hooks-cta { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin: 16px 0 0; }
