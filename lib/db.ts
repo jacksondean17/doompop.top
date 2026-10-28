@@ -889,6 +889,8 @@ export type AgentSummary = { name: string; model: string | null; votes: number; 
 export type AgentVote = {
   agent: string;
   model: string | null;
+  winner_id: number;
+  loser_id: number;
   winner: string;
   loser: string;
   reason: string | null;
@@ -939,7 +941,7 @@ export async function listAgents(): Promise<AgentSummary[]> {
 export async function recentAgentVotes(limit = 20): Promise<AgentVote[]> {
   const q = await db();
   return (await q`
-    SELECT a.name AS agent, a.model, w.title AS winner, l.title AS loser, v.reason, v.judged_on, v.created_at
+    SELECT a.name AS agent, a.model, v.winner_id, v.loser_id, w.title AS winner, l.title AS loser, v.reason, v.judged_on, v.created_at
     FROM votes v
     JOIN agents a ON a.id = v.agent_id
     JOIN songs w ON w.id = v.winner_id
@@ -1006,7 +1008,7 @@ export type StatSong = Pick<
   "id" | "title" | "artist" | "scene" | "rating" | "prior" | "wins" | "losses" | "views" | "agent_rating" | "agent_wins" | "agent_losses"
 >;
 export type PairTally = { winner_id: number; loser_id: number; n: number };
-export type Upset = { winner: string; loser: string; delta: number; created_at: string };
+export type Upset = { winner_id: number; loser_id: number; winner: string; loser: string; delta: number; created_at: string };
 export type DayCount = { day: string; human: number; agent: number };
 
 export async function statSongs(): Promise<StatSong[]> {
@@ -1030,7 +1032,7 @@ export async function pairTallies(ids: number[], by: VoterKind): Promise<PairTal
 export async function biggestUpsets(by: VoterKind, limit = 6): Promise<Upset[]> {
   const q = await db();
   return (await q`
-    SELECT w.title AS winner, l.title AS loser, v.delta, v.created_at
+    SELECT v.winner_id, v.loser_id, w.title AS winner, l.title AS loser, v.delta, v.created_at
     FROM votes v JOIN songs w ON w.id = v.winner_id JOIN songs l ON l.id = v.loser_id
     WHERE v.kind = ${by} AND v.delta > ${K_FACTOR / 2} AND w.status = 'approved' AND l.status = 'approved'
     ORDER BY v.delta DESC, v.created_at DESC LIMIT ${limit}`) as Upset[];
@@ -1045,4 +1047,77 @@ export async function dailyVotes(days = 30): Promise<DayCount[]> {
     FROM generate_series(current_date - ${days - 1}::int, current_date, interval '1 day') d
     LEFT JOIN votes v ON v.created_at >= d AND v.created_at < d + interval '1 day'
     GROUP BY d ORDER BY d`) as DayCount[];
+}
+
+// ---- One song's page -------------------------------------------------------------------------
+
+export type SongVote = {
+  id: number;
+  kind: VoterKind;
+  won: boolean;
+  delta: number;
+  opponent_id: number;
+  opponent: string;
+  opponent_live: boolean; // approved, so it has a page to link to
+  agent: string | null;
+  reason: string | null;
+  created_at: string;
+};
+export type Opponent = { id: number; title: string; artist: string | null; live: boolean; hw: number; hl: number; aw: number; al: number };
+
+export async function songById(id: number): Promise<Song | null> {
+  if (!Number.isSafeInteger(id) || id <= 0 || id > 2147483647) return null;
+  const q = await db();
+  const rows = (await q`
+    SELECT ${SONG_COLS!},
+      (SELECT count(*)::int FROM votes v
+        WHERE (v.winner_id = s.id OR v.loser_id = s.id) AND v.kind = 'human'
+          AND v.created_at > now() - interval '7 days') AS recent_votes
+    FROM songs s WHERE s.id = ${id} AND s.status = 'approved'`) as Omit<Song, "videos">[];
+  return (await withVideos(rows))[0] ?? null;
+}
+
+// Every vote the song was in, oldest first. Agents' names and reasons are public (as on /agents).
+export async function songHistory(id: number, kind: VoterKind): Promise<SongVote[]> {
+  const q = await db();
+  return (await q`
+    SELECT v.id, v.kind, v.winner_id = ${id} AS won, v.delta,
+      o.id AS opponent_id, o.title AS opponent, o.status = 'approved' AS opponent_live,
+      CASE WHEN a.disabled THEN NULL ELSE a.name END AS agent,
+      CASE WHEN a.disabled THEN NULL ELSE v.reason END AS reason, v.created_at
+    FROM votes v
+    JOIN songs o ON o.id = CASE WHEN v.winner_id = ${id} THEN v.loser_id ELSE v.winner_id END
+    LEFT JOIN agents a ON a.id = v.agent_id
+    WHERE (v.winner_id = ${id} OR v.loser_id = ${id}) AND v.kind = ${kind}
+    ORDER BY v.created_at, v.id`) as SongVote[];
+}
+
+// Everyone the song has met, with its record against each from humans (hw/hl) and agents (aw/al).
+export async function songOpponents(id: number): Promise<Opponent[]> {
+  const q = await db();
+  return (await q`
+    SELECT o.id, o.title, o.artist, o.status = 'approved' AS live,
+      count(*) FILTER (WHERE v.kind = 'human' AND v.winner_id = ${id})::int AS hw,
+      count(*) FILTER (WHERE v.kind = 'human' AND v.loser_id = ${id})::int AS hl,
+      count(*) FILTER (WHERE v.kind = 'agent' AND v.winner_id = ${id})::int AS aw,
+      count(*) FILTER (WHERE v.kind = 'agent' AND v.loser_id = ${id})::int AS al
+    FROM votes v
+    JOIN songs o ON o.id = CASE WHEN v.winner_id = ${id} THEN v.loser_id ELSE v.winner_id END
+    WHERE v.winner_id = ${id} OR v.loser_id = ${id}
+    GROUP BY o.id
+    ORDER BY count(*) DESC, max(v.created_at) DESC
+    LIMIT 100`) as Opponent[];
+}
+
+// Place on the chart, ordered as leaderboard() orders it (rating, then views).
+export async function songRank(id: number, kind: VoterKind): Promise<{ rank: number; of: number } | null> {
+  const q = await db();
+  const r = q(RATING_COL[kind].rating);
+  const [row] = (await q`
+    SELECT 1 + count(*) FILTER (WHERE o.${r} > s.${r} OR (o.${r} = s.${r} AND o.views > s.views))::int AS rank,
+      count(*)::int AS of
+    FROM songs s, songs o
+    WHERE s.id = ${id} AND s.status = 'approved' AND o.status = 'approved'
+    GROUP BY s.id`) as { rank: number; of: number }[];
+  return row ?? null;
 }

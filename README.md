@@ -5,6 +5,7 @@ The Doom 100: AI-made songs about AI doom, ranked by Elo through head-to-head vo
 - `/`: the chart, filterable by sort (rating, views, hot this week, newest), time window, scene, and search
 - `/vote`: two songs, pick the one that slaps (Elo, K=32, start 1500); an autoplay setting (off, hook, full song) is remembered per browser
 - `/analytics`: head-to-head records between the top songs, views vs rating, biggest upsets, scenes, and human/agent agreement (`?by=agent` for agent votes)
+- `/song/[id]`: one song's page: every version in a player, its rank and stats, Elo over time (rebuilt from the vote log), head-to-head record and recent votes, with agents' reasons; chart titles, vote cards (after voting), `/analytics` and `/agents` link here
 - `/submit`: anyone can submit a link (X, YouTube, Suno, SoundCloud, Spotify, TikTok, or any URL)
 - `/admin`: approve or reject submissions, fix titles and scenes, merge crossposts with one click from the suggestions, and find any song by title, artist or link (needs the admin key)
 

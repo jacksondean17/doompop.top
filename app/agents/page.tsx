@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { ago } from "@/components/format";
 import { hasDb, leaderboard, listAgents, recentAgentVotes, type AgentSummary, type AgentVote, type Song } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
@@ -14,21 +15,6 @@ const TOP = 10;
 const BIG_GAP = 3;
 
 type Side = "human" | "agent";
-
-function ago(when: string | Date | null): string {
-  if (!when) return "";
-  const s = Math.max(0, (Date.now() - new Date(when).getTime()) / 1000);
-  if (s < 60) return "just now";
-  const units: [number, string][] = [
-    [60, "min"],
-    [3600, "h"],
-    [86400, "d"],
-    [604800, "w"],
-  ];
-  let out = "";
-  for (const [secs, label] of units) if (s >= secs) out = `${Math.floor(s / secs)}${label === "min" ? " min" : label}`;
-  return `${out} ago`;
-}
 
 function Board({ side, songs, otherRank, showGap }: { side: Side; songs: Song[]; otherRank: Map<number, number>; showGap: boolean }) {
   const other = side === "human" ? "agents" : "humans";
@@ -46,7 +32,9 @@ function Board({ side, songs, otherRank, showGap }: { side: Side; songs: Song[];
           <li key={s.id} className={`ag-row${big ? " ag-split" : ""}${s.scene ? ` scene-${s.scene}` : ""}`}>
             <span className="ag-rank">{rank}</span>
             <span className="ag-song">
-              <span className="ag-title">{s.title}</span>
+              <a className="ag-title" href={`/song/${s.id}`}>
+                {s.title}
+              </a>
               {s.artist && <span className="ag-artist">{s.artist}</span>}
               {big && (
                 <span className={`ag-gap${gap > 0 ? " up" : " down"}`}>
@@ -263,7 +251,13 @@ export default async function AgentsPage() {
                   <p className="ag-verdict-line">
                     <b className="ag-agent">{v.agent}</b>
                     {v.model && <span className="ag-model"> ({v.model})</span>} picked{" "}
-                    <span className="ag-winner">{v.winner}</span> over <span className="ag-loser">{v.loser}</span>
+                    <a className="ag-winner" href={`/song/${v.winner_id}`}>
+                      {v.winner}
+                    </a>{" "}
+                    over{" "}
+                    <a className="ag-loser" href={`/song/${v.loser_id}`}>
+                      {v.loser}
+                    </a>
                   </p>
                   {v.reason && <blockquote className="ag-reason">&ldquo;{v.reason}&rdquo;</blockquote>}
                   {v.judged_on && v.judged_on.length > 0 && (
