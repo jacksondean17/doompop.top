@@ -220,15 +220,30 @@ export async function leaderboard(f: ChartFilters = {}): Promise<Song[]> {
 
 // Matchups lean toward songs that have been played less and toward songs with more reach,
 // so a first-time voter meets the big songs first; the opponent is nearby in rating.
-export async function pickMatchup(): Promise<[Song, Song] | null> {
+// `exclude` holds songs this visitor just saw; pairs they already voted on are never served again.
+// Both fall away if the chart is too small to honour them.
+export async function pickMatchup(opts: { exclude?: number[]; voter?: string } = {}): Promise<[Song, Song] | null> {
   const q = await db();
-  const [a] = (await q`
-    SELECT ${SONG_COLS!} FROM songs s WHERE s.status = 'approved'
-    ORDER BY (s.wins + s.losses) - s.prior / 40.0 + random() * 6 ASC LIMIT 1`) as Omit<Song, "videos">[];
+  const exclude = opts.exclude?.length ? opts.exclude : [0];
+  const voter = opts.voter ?? "";
+  type Row = Omit<Song, "videos">;
+  const pickA = async (avoid: number[]): Promise<Row[]> => (await q`
+    SELECT ${SONG_COLS!} FROM songs s WHERE s.status = 'approved' AND s.id <> ALL(${avoid})
+    ORDER BY (s.wins + s.losses) - s.prior / 50.0 + random() * 14 ASC LIMIT 1`) as Row[];
+  const pickB = async (a: Row, avoid: number[], fresh: boolean): Promise<Row[]> => (await q`
+    SELECT ${SONG_COLS!} FROM songs s
+    WHERE s.status = 'approved' AND s.id <> ${a.id} AND s.id <> ALL(${avoid})
+      ${fresh ? q`AND NOT EXISTS (
+        SELECT 1 FROM votes v WHERE v.voter_hash = ${voter}
+          AND ((v.winner_id = ${a.id} AND v.loser_id = s.id) OR (v.winner_id = s.id AND v.loser_id = ${a.id})))` : q``}
+    ORDER BY abs(s.rating - ${a.rating}) + random() * 400 ASC LIMIT 1`) as Row[];
+
+  let [a] = await pickA(exclude);
+  a ??= (await pickA([0]))[0];
   if (!a) return null;
-  const [b] = (await q`
-    SELECT ${SONG_COLS!} FROM songs s WHERE s.status = 'approved' AND s.id <> ${a.id}
-    ORDER BY abs(s.rating - ${a.rating}) + random() * 250 ASC LIMIT 1`) as Omit<Song, "videos">[];
+  let [b] = await pickB(a, exclude, true);
+  b ??= (await pickB(a, [0], true))[0];
+  b ??= (await pickB(a, [0], false))[0];
   if (!b) return null;
   const pair = await withVideos(Math.random() < 0.5 ? [a, b] : [b, a]);
   return [pair[0], pair[1]];

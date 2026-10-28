@@ -98,6 +98,7 @@ export default function VoteBooth({ scenes }: { scenes: Record<Scene, string> })
   const [busy, setBusy] = useState(false);
   const [count, setCount] = useState(0);
   const statusRef = useRef<HTMLDivElement>(null);
+  const seen = useRef<number[]>([]); // the last few songs shown, so the next pair is someone new
   // Which card is playing its hook (0 = A, 1 = B). `auto` plays A then B, CLIP_SECONDS each.
   const [playing, setPlaying] = useState<0 | 1 | null>(null);
   const [auto, setAuto] = useState(false);
@@ -141,7 +142,7 @@ export default function VoteBooth({ scenes }: { scenes: Record<Scene, string> })
     setPicked(null);
     setDelta(null);
     try {
-      const r = await fetch("/api/matchup", { cache: "no-store" });
+      const r = await fetch(`/api/matchup?recent=${seen.current.join(",")}`, { cache: "no-store" });
       const d = await r.json();
       if (!r.ok) {
         setError(ERRORS[d.error] ?? "Something broke.");
@@ -149,6 +150,7 @@ export default function VoteBooth({ scenes }: { scenes: Record<Scene, string> })
       } else {
         setError(null);
         setMatch(d);
+        seen.current = [...(d as Matchup).songs.map((x) => x.id), ...seen.current].slice(0, 8);
       }
     } catch {
       setError("Couldn't reach the server.");
