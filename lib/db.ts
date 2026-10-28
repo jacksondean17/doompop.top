@@ -271,10 +271,18 @@ export async function leaderboard(f: ChartFilters = {}): Promise<Song[]> {
   return withVideos(rows);
 }
 
-// Matchups lean toward songs that have been played less and toward songs with more reach,
-// so a first-time voter meets the big songs first; the opponent is nearby in rating.
+// Human matchups are drawn at random from weights, so any song can come up. The first song is
+// weighted toward higher ratings (which include the views head start, so a first-time voter meets
+// the big songs first) and toward songs played less; MATCH_FLOOR of the time it is drawn uniformly.
+// The opponent is weighted toward songs nearby in rating. Each draw sorts by -ln(u) / weight,
+// which picks a row with probability proportional to its weight.
 // `exclude` holds songs this visitor just saw; pairs they already voted on are never served again.
 // Both fall away if the chart is too small to honour them.
+export const MATCH_TEMP = 200; // rating points per e-fold of weight
+export const MATCH_PLAYS_EXP = 0.5; // weight divides by (1 + plays)^this
+export const MATCH_FLOOR = 0.05; // share of first picks drawn uniformly
+export const MATCH_SPREAD = 150; // rating gap per e-fold of opponent weight
+
 export async function pickMatchup(
   opts: { exclude?: number[]; voter?: string; kind?: VoterKind } = {},
 ): Promise<[Song, Song] | null> {
@@ -283,17 +291,21 @@ export async function pickMatchup(
   const agent = opts.kind === "agent";
   const exclude = opts.exclude?.length ? opts.exclude : [0];
   const voter = opts.voter ?? "";
+  const uniform = Math.random() < MATCH_FLOOR;
   type Row = Omit<Song, "videos">;
   const pickA = async (avoid: number[]): Promise<Row[]> => (await q`
     SELECT ${SONG_COLS!} FROM songs s WHERE s.status = 'approved' AND s.id <> ALL(${avoid})
-    ORDER BY ${agent ? q`(s.agent_wins + s.agent_losses)` : q`(s.wins + s.losses) - s.prior / 50.0`} + random() * 14 ASC LIMIT 1`) as Row[];
+    ORDER BY ${agent ? q`(s.agent_wins + s.agent_losses) + random() * 14`
+      : uniform ? q`random()`
+      : q`-ln(1 - random()) * power(1 + s.wins + s.losses, ${MATCH_PLAYS_EXP}::float) / exp((s.rating - 1500) / ${MATCH_TEMP}::float)`} ASC LIMIT 1`) as Row[];
   const pickB = async (a: Row, avoid: number[], fresh: boolean): Promise<Row[]> => (await q`
     SELECT ${SONG_COLS!} FROM songs s
     WHERE s.status = 'approved' AND s.id <> ${a.id} AND s.id <> ALL(${avoid})
       ${fresh ? q`AND NOT EXISTS (
         SELECT 1 FROM votes v WHERE v.voter_hash = ${voter}
           AND ((v.winner_id = ${a.id} AND v.loser_id = s.id) OR (v.winner_id = s.id AND v.loser_id = ${a.id})))` : q``}
-    ORDER BY ${agent ? q`abs(s.agent_rating - ${a.agent_rating})` : q`abs(s.rating - ${a.rating})`} + random() * 400 ASC LIMIT 1`) as Row[];
+    ORDER BY ${agent ? q`abs(s.agent_rating - ${a.agent_rating}) + random() * 400`
+      : q`-ln(1 - random()) * exp(abs(s.rating - ${a.rating}) / ${MATCH_SPREAD}::float)`} ASC LIMIT 1`) as Row[];
 
   let [a] = await pickA(exclude);
   a ??= (await pickA([0]))[0];
