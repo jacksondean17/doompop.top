@@ -1,4 +1,4 @@
-import { addVideo, hasDb, setHook, listByStatus, mergeSong, removeVideo, SCENES, splitVideo, stats, updateSong, type Scene, type Song } from "@/lib/db";
+import { addVideo, hasDb, setAgentDisabled, setHook, listByStatus, mergeSong, removeVideo, SCENES, splitVideo, stats, updateSong, type Scene, type Song } from "@/lib/db";
 import { isAdmin } from "@/lib/security";
 
 export const dynamic = "force-dynamic";
@@ -19,12 +19,15 @@ export async function GET(req: Request) {
 //   { videoId, split: true }                   detach a video into its own pending song
 //   { videoId, remove: true }                  delete a video (a song keeps at least one)
 //   { id, addUrl, artist? }                    attach another link to song id
+//   { agent, disabled }                        switch a registered AI agent off or back on
 //   { videoId, hook }                          set where the catchy bit starts, in seconds (null = guess)
 export async function POST(req: Request) {
   if (!isAdmin(req)) return Response.json({ error: "nope" }, { status: 401 });
   if (!hasDb) return Response.json({ error: "offline" }, { status: 503 });
   const body = await req.json().catch(() => null);
   if (!body) return Response.json({ error: "bad_body" }, { status: 400 });
+
+  if (typeof body.agent === "string") return Response.json({ ok: await setAgentDisabled(body.agent, Boolean(body.disabled)) });
 
   const videoId = Number(body.videoId);
   if (Number.isInteger(videoId) && body.split) return Response.json({ ok: await splitVideo(videoId) });

@@ -50,3 +50,18 @@ export function isAdmin(req: Request): boolean {
   const expected = Buffer.from(ADMIN_KEY_HASH);
   return given.length === expected.length && timingSafeEqual(given, expected);
 }
+
+// Agent API keys: shown once at registration, stored only as a sha256 hash.
+export function newAgentKey(): { key: string; hash: string } {
+  const key = `dp_${randomBytes(24).toString("base64url")}`;
+  return { key, hash: hashAgentKey(key) };
+}
+
+export function hashAgentKey(key: string): string {
+  return createHash("sha256").update(key).digest("hex");
+}
+
+export function bearerKey(req: Request): string | null {
+  const m = req.headers.get("authorization")?.match(/^Bearer\s+(dp_[\w-]{20,})$/i);
+  return m ? m[1] : null;
+}

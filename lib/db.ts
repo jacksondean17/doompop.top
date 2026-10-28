@@ -41,6 +41,9 @@ export type Song = {
   submitted_by: string | null;
   note: string | null;
   submitted_at: string;
+  agent_rating: number; // a separate Elo moved only by registered agents' votes
+  agent_wins: number;
+  agent_losses: number;
   recent_votes?: number;
   videos: Video[]; // most-viewed first
 };
@@ -130,6 +133,25 @@ function ensureSchema(): Promise<void> {
       )`;
     await sql`CREATE INDEX IF NOT EXISTS votes_voter_time ON votes (voter_hash, created_at)`;
     await sql`CREATE INDEX IF NOT EXISTS votes_time ON votes (created_at)`;
+    // v3: AI agents vote through their own API into a separate tally.
+    await sql`ALTER TABLE songs ADD COLUMN IF NOT EXISTS agent_rating DOUBLE PRECISION NOT NULL DEFAULT 1500`;
+    await sql`ALTER TABLE songs ADD COLUMN IF NOT EXISTS agent_wins INT NOT NULL DEFAULT 0`;
+    await sql`ALTER TABLE songs ADD COLUMN IF NOT EXISTS agent_losses INT NOT NULL DEFAULT 0`;
+    await sql`ALTER TABLE votes ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'human'`;
+    await sql`ALTER TABLE votes ADD COLUMN IF NOT EXISTS agent_id INT`;
+    await sql`ALTER TABLE votes ADD COLUMN IF NOT EXISTS reason TEXT`;
+    await sql`
+      CREATE TABLE IF NOT EXISTS agents (
+        id SERIAL PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE,
+        model TEXT,
+        contact TEXT,
+        key_hash TEXT NOT NULL UNIQUE,
+        ip_hash TEXT,
+        disabled BOOLEAN NOT NULL DEFAULT false,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        last_seen TIMESTAMPTZ
+      )`;
     await sql`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, at TIMESTAMPTZ NOT NULL DEFAULT now())`;
     for (const s of SEED_SONGS) {
       const p = parseSource(s.url);
@@ -172,7 +194,7 @@ export function priorFor(views: number): number {
 
 const SONG_COLS = sql
   ? sql`s.id, s.title, s.artist, s.scene, s.status, s.rating, s.prior, s.wins, s.losses, s.views, s.likes,
-        s.released_at, s.submitted_by, s.note, s.submitted_at`
+        s.released_at, s.submitted_by, s.note, s.submitted_at, s.agent_rating, s.agent_wins, s.agent_losses`
   : null;
 
 async function withVideos(songs: Omit<Song, "videos">[]): Promise<Song[]> {
@@ -189,13 +211,19 @@ async function withVideos(songs: Omit<Song, "videos">[]): Promise<Song[]> {
 
 export type ChartSort = "rating" | "views" | "hot" | "new";
 export type ChartWindow = "all" | "month" | "week";
-export type ChartFilters = { sort?: ChartSort; window?: ChartWindow; scene?: Scene; q?: string };
+export type VoterKind = "human" | "agent";
+// `by` picks whose ranking: humans (the default) or registered AI agents.
+export type ChartFilters = { sort?: ChartSort; window?: ChartWindow; scene?: Scene; q?: string; by?: VoterKind };
 
 const ORDER: Record<ChartSort, string> = {
   rating: "s.rating DESC, s.views DESC",
   views: "s.views DESC, s.rating DESC",
   hot: "recent_votes DESC, s.rating DESC",
   new: "COALESCE(s.released_at, s.submitted_at) DESC",
+};
+const RATING_COL: Record<VoterKind, { rating: string; wins: string; losses: string }> = {
+  human: { rating: "rating", wins: "wins", losses: "losses" },
+  agent: { rating: "agent_rating", wins: "agent_wins", losses: "agent_losses" },
 };
 const WINDOW_DAYS: Record<ChartWindow, number | null> = { all: null, month: 30, week: 7 };
 
@@ -204,16 +232,19 @@ export async function leaderboard(f: ChartFilters = {}): Promise<Song[]> {
   const sort = f.sort && f.sort in ORDER ? f.sort : "rating";
   const days = WINDOW_DAYS[f.window ?? "all"] ?? null;
   const search = f.q?.trim() ? `%${f.q.trim().replace(/[%_\\]/g, "\\$&")}%` : null;
+  const by: VoterKind = f.by === "agent" ? "agent" : "human";
+  const order = by === "agent" ? ORDER[sort].replaceAll("s.rating", "s.agent_rating") : ORDER[sort];
   const rows = (await q`
     SELECT ${SONG_COLS!},
       (SELECT count(*)::int FROM votes v
-        WHERE (v.winner_id = s.id OR v.loser_id = s.id) AND v.created_at > now() - interval '7 days') AS recent_votes
+        WHERE (v.winner_id = s.id OR v.loser_id = s.id) AND v.kind = ${by}
+          AND v.created_at > now() - interval '7 days') AS recent_votes
     FROM songs s
     WHERE s.status = 'approved'
       ${f.scene ? q`AND s.scene = ${f.scene}` : q``}
       ${days ? q`AND COALESCE(s.released_at, s.submitted_at) > now() - make_interval(days => ${days})` : q``}
       ${search ? q`AND (s.title ILIKE ${search} OR s.artist ILIKE ${search})` : q``}
-    ORDER BY ${q.unsafe(ORDER[sort])}
+    ORDER BY ${q.unsafe(order)}
     LIMIT 100`) as Omit<Song, "videos">[];
   return withVideos(rows);
 }
@@ -222,21 +253,25 @@ export async function leaderboard(f: ChartFilters = {}): Promise<Song[]> {
 // so a first-time voter meets the big songs first; the opponent is nearby in rating.
 // `exclude` holds songs this visitor just saw; pairs they already voted on are never served again.
 // Both fall away if the chart is too small to honour them.
-export async function pickMatchup(opts: { exclude?: number[]; voter?: string } = {}): Promise<[Song, Song] | null> {
+export async function pickMatchup(
+  opts: { exclude?: number[]; voter?: string; kind?: VoterKind } = {},
+): Promise<[Song, Song] | null> {
   const q = await db();
+  // Agents see no reach bias and are paired on their own ratings.
+  const agent = opts.kind === "agent";
   const exclude = opts.exclude?.length ? opts.exclude : [0];
   const voter = opts.voter ?? "";
   type Row = Omit<Song, "videos">;
   const pickA = async (avoid: number[]): Promise<Row[]> => (await q`
     SELECT ${SONG_COLS!} FROM songs s WHERE s.status = 'approved' AND s.id <> ALL(${avoid})
-    ORDER BY (s.wins + s.losses) - s.prior / 50.0 + random() * 14 ASC LIMIT 1`) as Row[];
+    ORDER BY ${agent ? q`(s.agent_wins + s.agent_losses)` : q`(s.wins + s.losses) - s.prior / 50.0`} + random() * 14 ASC LIMIT 1`) as Row[];
   const pickB = async (a: Row, avoid: number[], fresh: boolean): Promise<Row[]> => (await q`
     SELECT ${SONG_COLS!} FROM songs s
     WHERE s.status = 'approved' AND s.id <> ${a.id} AND s.id <> ALL(${avoid})
       ${fresh ? q`AND NOT EXISTS (
         SELECT 1 FROM votes v WHERE v.voter_hash = ${voter}
           AND ((v.winner_id = ${a.id} AND v.loser_id = s.id) OR (v.winner_id = s.id AND v.loser_id = ${a.id})))` : q``}
-    ORDER BY abs(s.rating - ${a.rating}) + random() * 400 ASC LIMIT 1`) as Row[];
+    ORDER BY ${agent ? q`abs(s.agent_rating - ${a.agent_rating})` : q`abs(s.rating - ${a.rating})`} + random() * 400 ASC LIMIT 1`) as Row[];
 
   let [a] = await pickA(exclude);
   a ??= (await pickA([0]))[0];
@@ -258,29 +293,33 @@ export async function recordVote(
   winnerId: number,
   loserId: number,
   voterHash: string,
+  agent?: { id: number; reason: string | null },
 ): Promise<number | null> {
   const q = await db();
+  const kind: VoterKind = agent ? "agent" : "human";
+  const c = RATING_COL[kind];
+  const [rating, wins, losses] = [q(c.rating), q(c.wins), q(c.losses)];
   const rows = (await q`
     WITH r AS (
       SELECT
-        (SELECT rating FROM songs WHERE id = ${winnerId} AND status = 'approved') AS w,
-        (SELECT rating FROM songs WHERE id = ${loserId} AND status = 'approved') AS l
+        (SELECT ${rating} FROM songs WHERE id = ${winnerId} AND status = 'approved') AS w,
+        (SELECT ${rating} FROM songs WHERE id = ${loserId} AND status = 'approved') AS l
     ),
     d AS (
       SELECT ${K_FACTOR}::float8 * (1 - 1 / (1 + power(10, (l - w) / 400.0))) AS delta
       FROM r WHERE w IS NOT NULL AND l IS NOT NULL
     ),
     ins AS (
-      INSERT INTO votes (nonce, winner_id, loser_id, voter_hash, delta)
-      SELECT ${nonce}, ${winnerId}, ${loserId}, ${voterHash}, delta FROM d
+      INSERT INTO votes (nonce, winner_id, loser_id, voter_hash, delta, kind, agent_id, reason)
+      SELECT ${nonce}, ${winnerId}, ${loserId}, ${voterHash}, delta, ${kind}, ${agent?.id ?? null}, ${agent?.reason ?? null} FROM d
       ON CONFLICT (nonce) DO NOTHING
       RETURNING delta
     ),
     upd AS (
       UPDATE songs SET
-        rating = rating + CASE WHEN id = ${winnerId} THEN ins.delta ELSE -ins.delta END,
-        wins = wins + CASE WHEN id = ${winnerId} THEN 1 ELSE 0 END,
-        losses = losses + CASE WHEN id = ${loserId} THEN 1 ELSE 0 END
+        ${rating} = ${rating} + CASE WHEN id = ${winnerId} THEN ins.delta ELSE -ins.delta END,
+        ${wins} = ${wins} + CASE WHEN id = ${winnerId} THEN 1 ELSE 0 END,
+        ${losses} = ${losses} + CASE WHEN id = ${loserId} THEN 1 ELSE 0 END
       FROM ins WHERE id IN (${winnerId}, ${loserId})
       RETURNING 1
     )
@@ -427,11 +466,15 @@ export async function mergeSong(fromId: number, intoId: number): Promise<boolean
     // Votes between the two are now a song against itself: drop them and their win/loss counts.
     const internal = await tx`
       DELETE FROM votes WHERE (winner_id = ${fromId} AND loser_id = ${intoId}) OR (winner_id = ${intoId} AND loser_id = ${fromId})
-      RETURNING 1`;
+      RETURNING kind`;
+    const internalHuman = internal.filter((v) => v.kind !== "agent").length;
+    const internalAgent = internal.length - internalHuman;
     await tx`UPDATE votes SET winner_id = ${intoId} WHERE winner_id = ${fromId}`;
     await tx`UPDATE votes SET loser_id = ${intoId} WHERE loser_id = ${fromId}`;
     await tx`
-      UPDATE songs t SET wins = t.wins + f.wins - ${internal.length}, losses = t.losses + f.losses - ${internal.length},
+      UPDATE songs t SET wins = t.wins + f.wins - ${internalHuman}, losses = t.losses + f.losses - ${internalHuman},
+        agent_wins = t.agent_wins + f.agent_wins - ${internalAgent},
+        agent_losses = t.agent_losses + f.agent_losses - ${internalAgent},
         scene = COALESCE(t.scene, f.scene), artist = COALESCE(t.artist, f.artist),
         status = CASE WHEN 'approved' IN (t.status, f.status) THEN 'approved' ELSE t.status END
       FROM songs f WHERE t.id = ${intoId} AND f.id = ${fromId}`;
@@ -560,4 +603,75 @@ export async function claimIngestRun(minSeconds: number): Promise<boolean> {
       WHERE meta.at < now() - make_interval(secs => ${minSeconds})
     RETURNING 1`;
   return rows.length > 0;
+}
+
+// ---- AI agents -------------------------------------------------------------------------------
+
+export type Agent = { id: number; name: string; model: string | null; disabled: boolean };
+export type AgentSummary = { name: string; model: string | null; votes: number; last_seen: string | null; created_at: string };
+export type AgentVote = {
+  agent: string;
+  model: string | null;
+  winner: string;
+  loser: string;
+  reason: string | null;
+  created_at: string;
+};
+
+export async function registerAgent(a: {
+  name: string;
+  model: string | null;
+  contact: string | null;
+  keyHash: string;
+  ipHash: string;
+}): Promise<"ok" | "taken"> {
+  const q = await db();
+  const r = await q`
+    INSERT INTO agents (name, model, contact, key_hash, ip_hash)
+    VALUES (${a.name}, ${a.model}, ${a.contact}, ${a.keyHash}, ${a.ipHash})
+    ON CONFLICT (name) DO NOTHING RETURNING id`;
+  return r.length ? "ok" : "taken";
+}
+
+export async function recentRegistrations(ipHash: string, seconds: number): Promise<number> {
+  const q = await db();
+  const [r] = await q`
+    SELECT count(*)::int AS n FROM agents
+    WHERE ip_hash = ${ipHash} AND created_at > now() - make_interval(secs => ${seconds})`;
+  return r.n;
+}
+
+export async function agentByKeyHash(keyHash: string): Promise<Agent | null> {
+  const q = await db();
+  const [a] = (await q`
+    UPDATE agents SET last_seen = now() WHERE key_hash = ${keyHash}
+    RETURNING id, name, model, disabled`) as Agent[];
+  return a ?? null;
+}
+
+export async function listAgents(): Promise<AgentSummary[]> {
+  const q = await db();
+  return (await q`
+    SELECT a.name, a.model, a.last_seen, a.created_at,
+      (SELECT count(*)::int FROM votes v WHERE v.agent_id = a.id) AS votes
+    FROM agents a WHERE NOT a.disabled
+    ORDER BY votes DESC, a.created_at ASC LIMIT 100`) as AgentSummary[];
+}
+
+export async function recentAgentVotes(limit = 20): Promise<AgentVote[]> {
+  const q = await db();
+  return (await q`
+    SELECT a.name AS agent, a.model, w.title AS winner, l.title AS loser, v.reason, v.created_at
+    FROM votes v
+    JOIN agents a ON a.id = v.agent_id
+    JOIN songs w ON w.id = v.winner_id
+    JOIN songs l ON l.id = v.loser_id
+    WHERE v.kind = 'agent' AND NOT a.disabled
+    ORDER BY v.created_at DESC LIMIT ${limit}`) as AgentVote[];
+}
+
+export async function setAgentDisabled(name: string, disabled: boolean): Promise<boolean> {
+  const q = await db();
+  const r = await q`UPDATE agents SET disabled = ${disabled} WHERE name = ${name} RETURNING 1`;
+  return r.length > 0;
 }
