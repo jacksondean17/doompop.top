@@ -12,24 +12,28 @@ export function hookStart(v: Video): number {
   return v.platform === "youtube" ? 45 : 0;
 }
 
-// Plays a video from its hook while `active`, pauses otherwise. Direct MP4s (X) get full control;
-// YouTube is restarted at the hook; anything else falls back to the plain embed.
+// Plays a video from its hook (or from 0 when `full`) while `active`, pauses otherwise. Direct MP4s (X)
+// get full control; YouTube is restarted at the hook; anything else falls back to the plain embed.
 export default function HookPlayer({
   video,
   active,
+  full = false,
   onBlocked,
   onUserPlay,
+  onEnded,
 }: {
   video: Video;
   active: boolean;
+  full?: boolean;
   onBlocked: () => void;
   onUserPlay: () => void; // the visitor pressed play on this player's own controls
+  onEnded?: () => void; // full mode: the song finished (or, for YouTube, is presumed to have)
 }) {
   const ref = useRef<HTMLVideoElement>(null);
   const ours = useRef(false); // true while a play() we started is pending, to tell it apart from the visitor's
   const [muted, setMuted] = useState(false);
   const [broken, setBroken] = useState(false);
-  const start = hookStart(video);
+  const start = full ? 0 : hookStart(video);
 
   useEffect(() => {
     const el = ref.current;
@@ -39,7 +43,9 @@ export default function HookPlayer({
       return;
     }
     if (!el.paused) return; // already playing because the visitor started it; leave their position alone
-    if (Math.abs(el.currentTime - start) > 1 && el.currentTime < start + CLIP_SECONDS - 1) el.currentTime = start;
+    if (full) {
+      if (el.ended) el.currentTime = 0;
+    } else if (Math.abs(el.currentTime - start) > 1 && el.currentTime < start + CLIP_SECONDS - 1) el.currentTime = start;
     ours.current = true;
     el.play().catch(() => {
       // Sound blocked until the visitor interacts: play muted and ask for a tap.
@@ -47,7 +53,20 @@ export default function HookPlayer({
       setMuted(true);
       el.play().catch(onBlocked);
     });
-  }, [active, start, onBlocked]);
+  }, [active, full, start, onBlocked]);
+
+  // A YouTube iframe doesn't tell us when it ends, so guess from the known duration (it can't see pauses or
+  // buffering). With no duration we never report an end, and the A-then-B sequence stops after A.
+  const yt = !(video.media_url && !broken) && video.platform === "youtube";
+  const ended = useRef(onEnded);
+  useEffect(() => {
+    ended.current = onEnded;
+  });
+  useEffect(() => {
+    if (!full || !active || !yt || !video.duration_ms) return;
+    const t = setTimeout(() => ended.current?.(), video.duration_ms);
+    return () => clearTimeout(t);
+  }, [full, active, yt, video.duration_ms]);
 
   if (video.media_url && !broken) {
     return (
@@ -59,6 +78,7 @@ export default function HookPlayer({
           playsInline
           preload="metadata"
           onError={() => setBroken(true)}
+          onEnded={full ? onEnded : undefined}
           onPlay={() => {
             if (ours.current) ours.current = false;
             else onUserPlay();
