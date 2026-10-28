@@ -23,6 +23,8 @@ export type Video = {
   media_url: string | null; // direct MP4 (X), so the vote page can start at the hook
   duration_ms: number | null;
   hook_s: number | null; // where the catchy bit starts; null = guess
+  play_fails?: number; // times a visitor's player couldn't play it (reported by components/SongPlayer)
+  play_fail_reason?: string | null;
 };
 
 export type Song = {
@@ -161,6 +163,10 @@ function ensureSchema(): Promise<void> {
         created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
         last_seen TIMESTAMPTZ
       )`;
+    // v5: which links don't play for visitors, so the admin can fix or replace them.
+    await sql`ALTER TABLE videos ADD COLUMN IF NOT EXISTS play_fails INT NOT NULL DEFAULT 0`;
+    await sql`ALTER TABLE videos ADD COLUMN IF NOT EXISTS play_fail_reason TEXT`;
+    await sql`ALTER TABLE videos ADD COLUMN IF NOT EXISTS play_fail_at TIMESTAMPTZ`;
     await sql`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, at TIMESTAMPTZ NOT NULL DEFAULT now())`;
     // v4: crossposts. dupe_of is the song a new arrival looked like; dismissed pairs stop being suggested.
     await sql`ALTER TABLE songs ADD COLUMN IF NOT EXISTS dupe_of INT REFERENCES songs(id) ON DELETE SET NULL`;
@@ -216,7 +222,8 @@ async function withVideos(songs: Omit<Song, "videos">[]): Promise<Song[]> {
   if (!songs.length) return [];
   const q = await db();
   const vids = (await q`
-    SELECT id, song_id, url, platform, embed_id, artist, views, likes, posted_at, media_url, duration_ms, hook_s FROM videos
+    SELECT id, song_id, url, platform, embed_id, artist, views, likes, posted_at, media_url, duration_ms, hook_s,
+           play_fails, play_fail_reason FROM videos
     WHERE song_id = ANY(${songs.map((s) => s.id)})
     ORDER BY views DESC NULLS LAST, likes DESC NULLS LAST, added_at ASC`) as Video[];
   const by = new Map<number, Video[]>();
@@ -578,6 +585,14 @@ export async function addVideo(
     await refreshSongs(tx, [songId]);
     return "ok" as const;
   });
+}
+
+export async function recordPlayFail(videoId: number, reason: string): Promise<boolean> {
+  const q = await db();
+  const r = await q`
+    UPDATE videos SET play_fails = play_fails + 1, play_fail_reason = ${reason}, play_fail_at = now()
+    WHERE id = ${videoId} RETURNING 1`;
+  return r.length > 0;
 }
 
 export async function setHook(videoId: number, seconds: number | null): Promise<boolean> {

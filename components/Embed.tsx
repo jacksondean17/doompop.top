@@ -21,24 +21,40 @@ function loadTwitter(): Promise<void> {
   return twitterScript;
 }
 
-function Tweet({ id, url }: { id: string; url: string }) {
+// `onFail` hears about posts that are gone or a widget that never loads (often a tracker blocker).
+export function Tweet({ id, url, onFail }: { id: string; url: string; onFail?: (why: string) => void }) {
   const ref = useRef<HTMLDivElement>(null);
+  const failRef = useRef(onFail);
+  useEffect(() => {
+    failRef.current = onFail;
+  });
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
     let cancelled = false;
+    const fallback = (why: string) => {
+      if (cancelled) return;
+      cancelled = true;
+      el.innerHTML = `<a href="${url}" target="_blank" rel="noreferrer">Open on X ↗</a>`;
+      failRef.current?.(why);
+    };
+    const t = setTimeout(() => fallback("tweet_timeout"), 10000);
     el.innerHTML = "";
     loadTwitter()
       .then(() => {
-        if (!cancelled && window.twttr) {
-          return window.twttr.widgets.createTweet(id, el, { theme: "dark", dnt: true, align: "center" });
-        }
+        if (!cancelled && window.twttr) return window.twttr.widgets.createTweet(id, el, { theme: "dark", dnt: true, align: "center" });
+      })
+      .then((made) => {
+        clearTimeout(t);
+        if (!cancelled && !made) fallback("tweet_missing");
       })
       .catch(() => {
-        if (!cancelled) el.innerHTML = `<a href="${url}" target="_blank" rel="noreferrer">Open on X ↗</a>`;
+        clearTimeout(t);
+        fallback("tweet_blocked");
       });
     return () => {
       cancelled = true;
+      clearTimeout(t);
     };
   }, [id, url]);
   return <div className="embed tweet" ref={ref} />;

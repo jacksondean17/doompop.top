@@ -1,10 +1,10 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
-import Embed from "@/components/Embed";
+import { useCallback, useEffect, useState } from "react";
+import SongPlayer from "@/components/SongPlayer";
 import { videoLabel } from "@/components/format";
 import type { Video } from "@/lib/db";
 
-type NowPlaying = { title: string; artist: string | null; video: Video };
+type NowPlaying = { title: string; artist: string | null; videos: Video[]; pick?: number };
 
 const EVENT = "doompop:play";
 
@@ -15,24 +15,16 @@ export function play(now: NowPlaying) {
 // A small window docked at the bottom of the page, so songs play without leaving the chart.
 export default function MiniPlayer() {
   const [now, setNow] = useState<NowPlaying | null>(null);
-  const [broken, setBroken] = useState(false);
-  const ref = useRef<HTMLVideoElement>(null);
+  const [current, setCurrent] = useState<Video | null>(null);
+  const onVideo = useCallback((v: Video | null) => setCurrent(v), []);
 
   useEffect(() => {
-    const on = (e: Event) => {
-      setBroken(false);
-      setNow((e as CustomEvent<NowPlaying>).detail);
-    };
+    const on = (e: Event) => setNow((e as CustomEvent<NowPlaying>).detail);
     window.addEventListener(EVENT, on);
     return () => window.removeEventListener(EVENT, on);
   }, []);
 
-  useEffect(() => {
-    ref.current?.play().catch(() => {});
-  }, [now]);
-
   if (!now) return null;
-  const v = now.video;
   return (
     <aside className="mini" aria-label="Now playing">
       <div className="mini-head">
@@ -40,32 +32,21 @@ export default function MiniPlayer() {
           <b>{now.title}</b>
           <span>
             {now.artist ? `${now.artist} · ` : ""}
-            {videoLabel(v)}
+            {current ? videoLabel(current) : "no playable version"}
           </span>
         </div>
-        <a className="mini-out" href={v.url} target="_blank" rel="noreferrer" title="Open the original post">
-          ↗
-        </a>
+        {current && (
+          <a className="mini-out" href={current.url} target="_blank" rel="noreferrer" title="Open the original post">
+            ↗
+          </a>
+        )}
         <button className="mini-close" onClick={() => setNow(null)} aria-label="Close player">
           ✕
         </button>
       </div>
-      {v.media_url && !broken ? (
-        <video
-          key={v.id}
-          ref={ref}
-          className="mini-video"
-          src={v.media_url}
-          controls
-          autoPlay
-          playsInline
-          onError={() => setBroken(true)}
-        />
-      ) : (
-        <div className="mini-embed">
-          <Embed key={v.id} platform={v.platform} embedId={v.embed_id} url={v.url} autoplay />
-        </div>
-      )}
+      <div className="mini-body">
+        <SongPlayer key={`${now.title}-${now.pick}-${now.videos.map((v) => v.id).join()}`} videos={now.videos} pick={now.pick} autoplay onVideo={onVideo} />
+      </div>
     </aside>
   );
 }
