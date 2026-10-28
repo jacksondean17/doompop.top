@@ -25,21 +25,26 @@ export function clean(s: string | null | undefined, n = 120): string | null {
   return v.length > n ? v.slice(0, n - 1).trimEnd() + "…" : v;
 }
 
-// First line of the tweet body from publish.twitter.com oEmbed html.
+// Song posts on X usually bury the title: "I gave Claude 12 hours… / Macrohard: Windows XP / I'm blown away".
+// Prefer a quoted name, then a short standalone line that isn't narration, then the first line.
+export function guessTitle(text: string): string | null {
+  const body = text.replace(/(?:https?:\/\/)?t\.co\/\S+|pic\.twitter\.com\/\S+|https?:\/\/\S+/g, "");
+  const quoted = body.match(/["“]([^"”\n]{2,48})["”]/)?.[1];
+  if (quoted) return clean(quoted, 80);
+  const lines = body
+    .split("\n")
+    .map((l) => l.trim().replace(/^(woke up to|presenting|introducing|meet|behold)\b[.:…\s-]*/i, ""))
+    .filter(Boolean);
+  const narration = /^(i|i'm|im|i've|we|my|this|it|here'?s|just|gave|so|and|wow|lol|omg|the most)\b|[.!?…]$|\?|\b(claude|opus|hours?|minutes?)\b/i;
+  const standalone = lines.find((l) => l.length <= 48 && !narration.test(l) && !/^[@#]/.test(l));
+  return clean(standalone ?? lines[0], 80);
+}
+
+// Text of the tweet from publish.twitter.com oEmbed html.
 export function tweetTitle(html: string): string | null {
   const p = html.match(/<p\b[^>]*>([\s\S]*?)<\/p>/i)?.[1];
   if (!p) return null;
-  const text = decodeEntities(
-    p
-      .replace(/<br\s*\/?>/gi, "\n")
-      .replace(/<a\b[^>]*>\s*(?:https?:\/\/t\.co\/\S*|pic\.twitter\.com\/\S*)\s*<\/a>/gi, "")
-      .replace(/<[^>]+>/g, ""),
-  )
-    .replace(/(?:https?:\/\/)?t\.co\/\S+|pic\.twitter\.com\/\S+/g, "")
-    .split("\n")
-    .map((l) => l.trim())
-    .find(Boolean);
-  return clean(text, 80);
+  return guessTitle(decodeEntities(p.replace(/<br\s*\/?>/gi, "\n").replace(/<[^>]+>/g, "")));
 }
 
 function attrs(tag: string): Record<string, string> {

@@ -1,18 +1,26 @@
 import { addCandidate, claimIngestRun } from "./db";
+import { guessTitle } from "./preview";
 
 // Finds fresh doom pop on X (via twitterapi.io) and YouTube, and drops it in the moderation queue.
 // Each source only runs when its key is configured.
 
+// Creators who reliably make the genre. Add handles as new regulars show up in the queue.
+const WATCHLIST = ["anabology", "sappyalien", "niuniu255431", "JagTheHero"];
+
+// The scene calls it "slopcore" and mostly posts "I gave Claude N hours…" music videos;
+// Claudia is @anabology's open character that other creators reuse.
 const X_QUERIES = [
-  // "doom pop" alone matches a real post-punk genre and Funko Pops, so require an AI-music signal.
-  `"doom pop" (ai OR suno OR udio OR agi OR "ai generated") -funko -filter:retweets`,
-  `(suno OR udio OR "ai song" OR "ai generated song" OR "ai music") (agi OR singularity OR "ai safety" OR alignment OR doom OR superintelligence OR "p(doom)") filter:videos -filter:retweets`,
+  `(${WATCHLIST.map((h) => `from:${h}`).join(" OR ")}) filter:videos -filter:retweets`,
+  `(slopcore OR #slopcore OR claudia) filter:videos min_faves:10 -filter:retweets`,
+  `("gave claude" OR "asked claude" OR "claude made" OR "claude wrote" OR "gave opus") (song OR "music video") filter:videos min_faves:10 -filter:retweets`,
+  `(song OR "music video") (agi OR singularity OR superintelligence OR "ai safety" OR alignment OR "ai bubble" OR "p(doom)" OR "pace the frontier") filter:videos min_faves:25 -filter:retweets`,
 ];
 
 const YT_QUERIES = ["AI doom song suno", "AGI singularity song AI generated", "AI alignment song"];
 
 const MIN_INTERVAL_SECONDS = 50 * 60;
-const LOOKBACK_SECONDS = 3 * 60 * 60;
+// Posts need time to collect likes before min_faves lets them through, so look back two days.
+const LOOKBACK_SECONDS = 48 * 60 * 60;
 
 type Found = { url: string; title: string; artist: string | null; note: string | null };
 type QueryLog = { source: string; query: string; status: number | string; results: number; error?: string };
@@ -50,7 +58,7 @@ async function searchX(key: string, log: QueryLog[], lookback: number): Promise<
       if (!t.id || !handle) continue;
       out.push({
         url: `https://x.com/${handle}/status/${t.id}`,
-        title: firstLine(t.text ?? ""),
+        title: guessTitle(t.text ?? "") ?? "Untitled",
         artist: `@${handle}`,
         note: (t.text ?? "").slice(0, 500) || null,
       });
