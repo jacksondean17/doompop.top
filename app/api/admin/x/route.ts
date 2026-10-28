@@ -11,6 +11,9 @@ type Tweet = {
   viewCount?: number;
   author?: { userName?: string; followers?: number };
   extendedEntities?: { media?: { type?: string }[] };
+  entities?: { urls?: { expanded_url?: string }[] };
+  quoted_tweet?: Tweet | null;
+  inReplyToId?: string | null;
 };
 
 // Admin-only window onto X search, used to discover what terms the bot should watch.
@@ -45,6 +48,9 @@ export async function GET(req: Request) {
       views: t.viewCount,
       followers: t.author?.followers,
       media: t.extendedEntities?.media?.map((m) => m.type) ?? [],
+      links: t.entities?.urls?.map((u) => u.expanded_url).filter(Boolean) ?? [],
+      quoted: t.quoted_tweet ? `https://x.com/${t.quoted_tweet.author?.userName}/status/${t.quoted_tweet.id}` : null,
+      replyTo: t.inReplyToId ?? null,
       text: t.text,
     })),
   });
