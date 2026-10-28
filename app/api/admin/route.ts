@@ -44,7 +44,7 @@ export async function POST(req: Request) {
     status: STATUSES.includes(body.status) ? body.status : undefined,
     title: typeof body.title === "string" && body.title.trim() ? body.title.trim().slice(0, 120) : undefined,
     artist: typeof body.artist === "string" ? body.artist.trim().slice(0, 80) || null : undefined,
-    scene: body.scene === null ? null : body.scene in SCENES ? (body.scene as Scene) : undefined,
+    scene: body.scene === null ? null : Object.hasOwn(SCENES, body.scene) ? (body.scene as Scene) : undefined,
   });
   return Response.json({ ok: true });
 }

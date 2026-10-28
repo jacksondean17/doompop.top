@@ -105,9 +105,11 @@ function ensureSchema(): Promise<void> {
         added_at TIMESTAMPTZ NOT NULL DEFAULT now()
       )`;
     await sql`CREATE INDEX IF NOT EXISTS videos_song ON videos (song_id)`;
+    // The title a video arrived with, so splitting it back off after a merge restores it.
+    await sql`ALTER TABLE videos ADD COLUMN IF NOT EXISTS title TEXT`;
     await sql`
-      INSERT INTO videos (song_id, url, platform, embed_id, artist, added_at)
-      SELECT id, url, platform, embed_id, artist, submitted_at FROM songs
+      INSERT INTO videos (song_id, url, platform, embed_id, artist, title, added_at)
+      SELECT id, url, platform, embed_id, artist, title, submitted_at FROM songs
       WHERE NOT EXISTS (SELECT 1 FROM videos v WHERE v.song_id = songs.id)
       ON CONFLICT (url) DO NOTHING`;
     await sql`
@@ -134,8 +136,8 @@ function ensureSchema(): Promise<void> {
         ON CONFLICT (url) DO NOTHING RETURNING id`;
       if (song) {
         await sql`
-          INSERT INTO videos (song_id, url, platform, embed_id, artist)
-          VALUES (${song.id}, ${p.url}, ${p.platform}, ${p.embedId}, ${s.artist ?? null})
+          INSERT INTO videos (song_id, url, platform, embed_id, artist, title)
+          VALUES (${song.id}, ${p.url}, ${p.platform}, ${p.embedId}, ${s.artist ?? null}, ${s.title})
           ON CONFLICT (url) DO NOTHING`;
       }
     }
@@ -318,8 +320,8 @@ async function insertSongWithVideo(v: NewVideo): Promise<"ok" | "duplicate" | "i
               ${v.postedAt ?? null})
       RETURNING id`;
     await tx`
-      INSERT INTO videos (song_id, url, platform, embed_id, artist, views, likes, posted_at, stats_at)
-      VALUES (${song.id}, ${p.url}, ${p.platform}, ${p.embedId}, ${v.artist}, ${v.views ?? null}, ${v.likes ?? null},
+      INSERT INTO videos (song_id, url, platform, embed_id, artist, title, views, likes, posted_at, stats_at)
+      VALUES (${song.id}, ${p.url}, ${p.platform}, ${p.embedId}, ${v.artist}, ${v.title}, ${v.views ?? null}, ${v.likes ?? null},
               ${v.postedAt ?? null}, CASE WHEN ${v.views != null} THEN now() END)`;
     return "ok" as const;
   });
@@ -405,7 +407,8 @@ export async function mergeSong(fromId: number, intoId: number): Promise<boolean
     await tx`UPDATE votes SET loser_id = ${intoId} WHERE loser_id = ${fromId}`;
     await tx`
       UPDATE songs t SET wins = t.wins + f.wins - ${internal.length}, losses = t.losses + f.losses - ${internal.length},
-        scene = COALESCE(t.scene, f.scene), artist = COALESCE(t.artist, f.artist)
+        scene = COALESCE(t.scene, f.scene), artist = COALESCE(t.artist, f.artist),
+        status = CASE WHEN 'approved' IN (t.status, f.status) THEN 'approved' ELSE t.status END
       FROM songs f WHERE t.id = ${intoId} AND f.id = ${fromId}`;
     await tx`DELETE FROM songs WHERE id = ${fromId}`;
     await refreshSongs(tx, [intoId]);
@@ -418,13 +421,16 @@ export async function splitVideo(videoId: number): Promise<boolean> {
   const q = await db();
   return q.begin(async (tx) => {
     const [v] = await tx`
-      SELECT v.*, s.title FROM videos v JOIN songs s ON s.id = v.song_id WHERE v.id = ${videoId}`;
+      SELECT v.*, s.title AS song_title FROM videos v JOIN songs s ON s.id = v.song_id WHERE v.id = ${videoId}`;
     if (!v) return false;
     const [{ n }] = await tx`SELECT count(*)::int AS n FROM videos WHERE song_id = ${v.song_id}`;
     if (n < 2) return false;
+    // songs.url must be unique, and the video's own url may already be the parent's.
+    const taken = await tx`SELECT 1 FROM songs WHERE url = ${v.url}`;
     const [song] = await tx`
       INSERT INTO songs (url, title, artist, platform, embed_id, submitted_by)
-      VALUES (${v.url + "#split" + videoId}, ${v.title}, ${v.artist}, ${v.platform}, ${v.embed_id}, 'split')
+      VALUES (${taken.length ? `${v.url}#split${videoId}` : v.url}, ${v.title ?? v.song_title}, ${v.artist},
+              ${v.platform}, ${v.embed_id}, 'split')
       RETURNING id`;
     await tx`UPDATE videos SET song_id = ${song.id} WHERE id = ${videoId}`;
     await refreshSongs(tx, [v.song_id, song.id]);
@@ -446,15 +452,24 @@ export async function removeVideo(videoId: number): Promise<boolean> {
 }
 
 // Attaches another link to an existing song directly (admin).
-export async function addVideo(songId: number, url: string, artist: string | null): Promise<"ok" | "duplicate" | "invalid"> {
+export async function addVideo(
+  songId: number,
+  url: string,
+  artist: string | null,
+): Promise<"ok" | "duplicate" | "invalid" | "missing"> {
   const p = parseSource(url);
   if (!p) return "invalid";
   const q = await db();
   return q.begin(async (tx) => {
+    const [song] = await tx`SELECT title FROM songs WHERE id = ${songId}`;
+    if (!song) return "missing" as const;
     const r = await tx`
-      INSERT INTO videos (song_id, url, platform, embed_id, artist) VALUES (${songId}, ${p.url}, ${p.platform}, ${p.embedId}, ${artist})
+      INSERT INTO videos (song_id, url, platform, embed_id, artist, title)
+      VALUES (${songId}, ${p.url}, ${p.platform}, ${p.embedId}, ${artist}, ${song.title})
       ON CONFLICT (url) DO NOTHING RETURNING id`;
-    return r.length ? ("ok" as const) : ("duplicate" as const);
+    if (!r.length) return "duplicate" as const;
+    await refreshSongs(tx, [songId]);
+    return "ok" as const;
   });
 }
 

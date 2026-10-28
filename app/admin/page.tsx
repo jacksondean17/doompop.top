@@ -77,7 +77,7 @@ export default function AdminPage() {
       body: JSON.stringify(body),
     });
     const d = await r.json().catch(() => null);
-    if (!r.ok || d?.ok === false) setFlash(`Didn't work${d?.result ? ` (${d.result})` : d?.error ? ` (${d.error})` : ""}.`);
+    if ((!r.ok || d?.ok === false) && !d?.result) setFlash(`Didn't work${d?.result ? ` (${d.result})` : d?.error ? ` (${d.error})` : ""}.`);
     else setFlash(null);
     await load(key, tab);
     return d;

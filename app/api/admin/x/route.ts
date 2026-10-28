@@ -38,6 +38,7 @@ export async function GET(req: Request) {
   const r = await fetch(url, { headers: { "X-API-Key": key } });
   const d = (await r.json().catch(() => ({}))) as { tweets?: Tweet[]; next_cursor?: string };
   if (!r.ok) return Response.json({ error: r.status, detail: d }, { status: 502 });
+  if (params.get("raw")) return Response.json(d);
   return Response.json({
     next_cursor: d.next_cursor ?? null,
     tweets: (d.tweets ?? []).map((t) => ({
