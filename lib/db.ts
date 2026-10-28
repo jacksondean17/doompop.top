@@ -904,3 +904,51 @@ export async function setAgentDisabled(name: string, disabled: boolean): Promise
   const r = await q`UPDATE agents SET disabled = ${disabled} WHERE name = ${name} RETURNING 1`;
   return r.length > 0;
 }
+
+// ---- Analytics -------------------------------------------------------------------------------
+
+export type StatSong = Pick<
+  Song,
+  "id" | "title" | "artist" | "scene" | "rating" | "prior" | "wins" | "losses" | "views" | "agent_rating" | "agent_wins" | "agent_losses"
+>;
+export type PairTally = { winner_id: number; loser_id: number; n: number };
+export type Upset = { winner: string; loser: string; delta: number; created_at: string };
+export type DayCount = { day: string; human: number; agent: number };
+
+export async function statSongs(): Promise<StatSong[]> {
+  const q = await db();
+  return (await q`
+    SELECT id, title, artist, scene, rating, prior, wins, losses, views, agent_rating, agent_wins, agent_losses
+    FROM songs WHERE status = 'approved'`) as StatSong[];
+}
+
+// How often each song beat each other one, for every pair within `ids` that has met.
+export async function pairTallies(ids: number[], by: VoterKind): Promise<PairTally[]> {
+  if (!ids.length) return [];
+  const q = await db();
+  return (await q`
+    SELECT winner_id, loser_id, count(*)::int AS n FROM votes
+    WHERE kind = ${by} AND winner_id = ANY(${ids}) AND loser_id = ANY(${ids})
+    GROUP BY winner_id, loser_id`) as PairTally[];
+}
+
+// The bigger the Elo delta, the less the winner was expected to win; over K/2 means the underdog won.
+export async function biggestUpsets(by: VoterKind, limit = 6): Promise<Upset[]> {
+  const q = await db();
+  return (await q`
+    SELECT w.title AS winner, l.title AS loser, v.delta, v.created_at
+    FROM votes v JOIN songs w ON w.id = v.winner_id JOIN songs l ON l.id = v.loser_id
+    WHERE v.kind = ${by} AND v.delta > ${K_FACTOR / 2} AND w.status = 'approved' AND l.status = 'approved'
+    ORDER BY v.delta DESC, v.created_at DESC LIMIT ${limit}`) as Upset[];
+}
+
+export async function dailyVotes(days = 30): Promise<DayCount[]> {
+  const q = await db();
+  return (await q`
+    SELECT to_char(d, 'YYYY-MM-DD') AS day,
+      count(v.id) FILTER (WHERE v.kind = 'human')::int AS human,
+      count(v.id) FILTER (WHERE v.kind = 'agent')::int AS agent
+    FROM generate_series(current_date - ${days - 1}::int, current_date, interval '1 day') d
+    LEFT JOIN votes v ON v.created_at >= d AND v.created_at < d + interval '1 day'
+    GROUP BY d ORDER BY d`) as DayCount[];
+}
