@@ -63,6 +63,7 @@ function ensureSchema(): Promise<void> {
         created_at TIMESTAMPTZ NOT NULL DEFAULT now()
       )`;
     await sql`CREATE INDEX IF NOT EXISTS votes_voter_time ON votes (voter_hash, created_at)`;
+    await sql`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, at TIMESTAMPTZ NOT NULL DEFAULT now())`;
     for (const s of SEED_SONGS) {
       const p = parseSource(s.url);
       if (!p) continue;
@@ -217,4 +218,32 @@ export async function stats(): Promise<{ songs: number; votes: number; pending: 
       (SELECT count(*)::int FROM songs WHERE status = 'pending') AS pending,
       (SELECT count(*)::int FROM votes) AS votes`) as { songs: number; votes: number; pending: number }[];
   return r;
+}
+
+// Atomically claims the next bot run if the last one was long enough ago.
+export async function claimIngestRun(minSeconds: number): Promise<boolean> {
+  const q = await db();
+  const rows = await q`
+    INSERT INTO meta (key, at) VALUES ('ingest', now())
+    ON CONFLICT (key) DO UPDATE SET at = now()
+      WHERE meta.at < now() - make_interval(secs => ${minSeconds})
+    RETURNING 1`;
+  return rows.length > 0;
+}
+
+export async function addCandidate(f: {
+  url: string;
+  title: string;
+  artist: string | null;
+  note: string | null;
+}): Promise<boolean> {
+  const p = parseSource(f.url);
+  if (!p) return false;
+  const q = await db();
+  const rows = await q`
+    INSERT INTO songs (url, title, artist, platform, embed_id, submitted_by, note)
+    VALUES (${p.url}, ${f.title}, ${f.artist}, ${p.platform}, ${p.embedId}, 'bot', ${f.note})
+    ON CONFLICT (url) DO NOTHING
+    RETURNING id`;
+  return rows.length > 0;
 }

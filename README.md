@@ -28,3 +28,11 @@ DATABASE_URL=postgres://user:pw@localhost:5432/doompop npm run dev
 ## Vote integrity
 
 Each matchup carries an HMAC-signed, single-use token, so a vote only counts for a pair the server actually served. Votes are also rate-limited per hashed IP (30 a minute, 1000 a day). That's enough for a group chat, not for a determined attacker.
+
+## The bot
+
+`/api/ingest` searches X (through [twitterapi.io](https://twitterapi.io), about $0.15 per 1k tweets) and YouTube (Data API, free) for new doom pop and drops what it finds into the `/admin` queue as `bot` submissions. Nothing reaches the chart until it's approved.
+
+- Each source runs only when its key is set in Vercel: `TWITTERAPI_IO_KEY`, `YOUTUBE_API_KEY`
+- A GitHub Action calls it hourly, with a daily Vercel cron as backup. The database throttles runs to one per 50 minutes, so the public endpoint can't be abused into spending API credit.
+- Search queries live at the top of `lib/ingest.ts`

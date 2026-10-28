@@ -1,0 +1,13 @@
+name: Find new doom pop
+
+on:
+  schedule:
+    - cron: "23 * * * *"
+  workflow_dispatch:
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - run: curl -sS --max-time 90 https://doompop.top/api/ingest
