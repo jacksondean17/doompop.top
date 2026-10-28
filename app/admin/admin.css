@@ -1,0 +1,31 @@
+.adm { min-width: 0; }
+.adm .btn.ghost.on { border-color: var(--acid); color: var(--acid); }
+.adm .acts { display: flex; gap: 8px; flex-wrap: wrap; }
+.adm-tabs { display: flex; gap: 6px; margin: 16px 0; flex-wrap: wrap; }
+.adm-row { border: 1px solid var(--line); padding: 12px; display: grid; gap: 10px; margin-bottom: 12px; min-width: 0; }
+.adm-row a { overflow-wrap: anywhere; }
+.adm-fields { display: grid; grid-template-columns: 2fr 1fr 150px; gap: 8px; }
+.adm-fields > * { min-width: 0; }
+.adm-hint { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; border: 1px dashed var(--acid); color: var(--acid); padding: 8px 10px; font-size: 13px; }
+.adm-hint .btn.ghost { padding: 4px 10px; font-size: 12px; color: var(--acid); border-color: var(--acid); }
+.adm-videos { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.adm-videos li { border-left: 2px solid var(--line); padding-left: 10px; display: grid; gap: 6px; min-width: 0; }
+.adm-videos li:first-child { border-left-color: var(--acid); }
+.adm-vid { display: flex; gap: 6px 12px; flex-wrap: wrap; align-items: baseline; font-size: 13px; color: var(--dim); min-width: 0; }
+.adm-vid .badge { margin-left: 0; }
+.adm-videos .btn.ghost { padding: 4px 10px; font-size: 12px; }
+.adm-merge { display: grid; gap: 6px; border: 1px solid var(--line); padding: 10px; background: var(--panel); }
+.adm-pick { font: inherit; text-align: left; color: var(--ink); background: transparent; border: 1px solid var(--line); padding: 8px 10px; cursor: pointer; display: grid; gap: 2px; overflow-wrap: anywhere; }
+.adm-pick:hover { border-color: var(--acid); }
+.adm-add { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.adm-add input { flex: 1 1 220px; min-width: 0; width: auto; }
+.adm-ok { color: var(--acid); font-size: 13px; }
+.adm-bad { color: var(--blood); font-size: 13px; }
+
+@media (max-width: 680px) {
+  .adm-fields { grid-template-columns: 1fr; }
+}
+
+.adm-hook { display: grid; gap: 8px; margin: 8px 0; }
+.adm-hook video { width: 100%; max-height: 360px; background: #000; }
+.adm-hook input { width: 6em; }

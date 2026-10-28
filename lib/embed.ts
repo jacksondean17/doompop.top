@@ -69,10 +69,18 @@ export function parseSource(raw: string): ParsedSource | null {
   return { platform: "link", embedId: "", url: u.toString() };
 }
 
-export function iframeSrc(platform: Platform, embedId: string): string | null {
+export function iframeSrc(
+  platform: Platform,
+  embedId: string,
+  opts: { start?: number; autoplay?: boolean } = {},
+): string | null {
   switch (platform) {
-    case "youtube":
-      return `https://www.youtube-nocookie.com/embed/${embedId}`;
+    case "youtube": {
+      const qs = new URLSearchParams({ playsinline: "1" });
+      if (opts.start) qs.set("start", String(Math.floor(opts.start)));
+      if (opts.autoplay) qs.set("autoplay", "1");
+      return `https://www.youtube-nocookie.com/embed/${embedId}?${qs}`;
+    }
     case "suno":
       return `https://suno.com/embed/${embedId}`;
     case "soundcloud":
