@@ -25,3 +25,7 @@
 @media (max-width: 680px) {
   .adm-fields { grid-template-columns: 1fr; }
 }
+
+.adm-hook { display: grid; gap: 8px; margin: 8px 0; }
+.adm-hook video { width: 100%; max-height: 360px; background: #000; }
+.adm-hook input { width: 6em; }

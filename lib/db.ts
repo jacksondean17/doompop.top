@@ -20,6 +20,9 @@ export type Video = {
   views: number | null;
   likes: number | null;
   posted_at: string | null;
+  media_url: string | null; // direct MP4 (X), so the vote page can start at the hook
+  duration_ms: number | null;
+  hook_s: number | null; // where the catchy bit starts; null = guess
 };
 
 export type Song = {
@@ -107,6 +110,9 @@ function ensureSchema(): Promise<void> {
     await sql`CREATE INDEX IF NOT EXISTS videos_song ON videos (song_id)`;
     // The title a video arrived with, so splitting it back off after a merge restores it.
     await sql`ALTER TABLE videos ADD COLUMN IF NOT EXISTS title TEXT`;
+    await sql`ALTER TABLE videos ADD COLUMN IF NOT EXISTS media_url TEXT`;
+    await sql`ALTER TABLE videos ADD COLUMN IF NOT EXISTS duration_ms INT`;
+    await sql`ALTER TABLE videos ADD COLUMN IF NOT EXISTS hook_s DOUBLE PRECISION`;
     await sql`
       INSERT INTO videos (song_id, url, platform, embed_id, artist, title, added_at)
       SELECT id, url, platform, embed_id, artist, title, submitted_at FROM songs
@@ -173,7 +179,7 @@ async function withVideos(songs: Omit<Song, "videos">[]): Promise<Song[]> {
   if (!songs.length) return [];
   const q = await db();
   const vids = (await q`
-    SELECT id, song_id, url, platform, embed_id, artist, views, likes, posted_at FROM videos
+    SELECT id, song_id, url, platform, embed_id, artist, views, likes, posted_at, media_url, duration_ms, hook_s FROM videos
     WHERE song_id = ANY(${songs.map((s) => s.id)})
     ORDER BY views DESC NULLS LAST, likes DESC NULLS LAST, added_at ASC`) as Video[];
   const by = new Map<number, Video[]>();
@@ -300,6 +306,8 @@ type NewVideo = {
   views?: number | null;
   likes?: number | null;
   postedAt?: string | null;
+  mediaUrl?: string | null;
+  durationMs?: number | null;
 };
 
 // Every submission starts as its own pending song; an admin can merge it into an existing one.
@@ -320,9 +328,9 @@ async function insertSongWithVideo(v: NewVideo): Promise<"ok" | "duplicate" | "i
               ${v.postedAt ?? null})
       RETURNING id`;
     await tx`
-      INSERT INTO videos (song_id, url, platform, embed_id, artist, title, views, likes, posted_at, stats_at)
+      INSERT INTO videos (song_id, url, platform, embed_id, artist, title, views, likes, posted_at, media_url, duration_ms, stats_at)
       VALUES (${song.id}, ${p.url}, ${p.platform}, ${p.embedId}, ${v.artist}, ${v.title}, ${v.views ?? null}, ${v.likes ?? null},
-              ${v.postedAt ?? null}, CASE WHEN ${v.views != null} THEN now() END)`;
+              ${v.postedAt ?? null}, ${v.mediaUrl ?? null}, ${v.durationMs ?? null}, CASE WHEN ${v.views != null} THEN now() END)`;
     return "ok" as const;
   });
 }
@@ -347,6 +355,8 @@ export async function addCandidate(f: {
   views?: number | null;
   likes?: number | null;
   postedAt?: string | null;
+  mediaUrl?: string | null;
+  durationMs?: number | null;
 }): Promise<boolean> {
   return (await insertSongWithVideo({ ...f, submittedBy: "bot" })) === "ok";
 }
@@ -473,10 +483,17 @@ export async function addVideo(
   });
 }
 
+export async function setHook(videoId: number, seconds: number | null): Promise<boolean> {
+  const q = await db();
+  const r = await q`UPDATE videos SET hook_s = ${seconds} WHERE id = ${videoId} RETURNING 1`;
+  return r.length > 0;
+}
+
 export async function staleVideos(platform: Platform, olderThanHours: number, limit: number): Promise<Video[]> {
   const q = await db();
   return (await q`
-    SELECT v.id, v.song_id, v.url, v.platform, v.embed_id, v.artist, v.views, v.likes, v.posted_at
+    SELECT v.id, v.song_id, v.url, v.platform, v.embed_id, v.artist, v.views, v.likes, v.posted_at,
+           v.media_url, v.duration_ms, v.hook_s
     FROM videos v JOIN songs s ON s.id = v.song_id
     WHERE v.platform = ${platform} AND s.status <> 'rejected'
       AND (v.stats_at IS NULL OR v.stats_at < now() - make_interval(hours => ${olderThanHours}))
@@ -484,7 +501,14 @@ export async function staleVideos(platform: Platform, olderThanHours: number, li
 }
 
 export async function saveVideoStats(
-  stats: { id: number; views: number | null; likes: number | null; postedAt: string | null }[],
+  stats: {
+    id: number;
+    views: number | null;
+    likes: number | null;
+    postedAt: string | null;
+    mediaUrl?: string | null;
+    durationMs?: number | null;
+  }[],
 ): Promise<void> {
   if (!stats.length) return;
   const q = await db();
@@ -493,7 +517,8 @@ export async function saveVideoStats(
     for (const s of stats) {
       const [r] = await tx`
         UPDATE videos SET views = COALESCE(${s.views}, views), likes = COALESCE(${s.likes}, likes),
-          posted_at = COALESCE(${s.postedAt}, posted_at), stats_at = now()
+          posted_at = COALESCE(${s.postedAt}, posted_at), media_url = COALESCE(${s.mediaUrl ?? null}, media_url),
+          duration_ms = COALESCE(${s.durationMs ?? null}, duration_ms), stats_at = now()
         WHERE id = ${s.id} RETURNING song_id`;
       if (r) songIds.add(r.song_id);
     }

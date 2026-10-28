@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Embed from "@/components/Embed";
 import type { Scene, Song, Video } from "@/lib/db";
 import "./admin.css";
@@ -256,8 +256,50 @@ function VideoItem({ video: v, first, many, post }: { video: Video; first: boole
           </>
         )}
       </div>
-      {open && <Embed platform={v.platform} embedId={v.embed_id} url={v.url} />}
+      {open && <HookSetter video={v} post={post} />}
+      {open && !v.media_url && <Embed platform={v.platform} embedId={v.embed_id} url={v.url} />}
     </li>
+  );
+}
+
+const mmss = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+const parseTime = (t: string) => {
+  const m = t.trim().match(/^(?:(\d+):)?(\d+(?:\.\d+)?)$/);
+  return m ? Number(m[1] ?? 0) * 60 + Number(m[2]) : null;
+};
+
+// Where the vote page starts this video. With a direct MP4 you can scrub to the catchy bit and grab the time.
+function HookSetter({ video: v, post }: { video: Video; post: Post }) {
+  const ref = useRef<HTMLVideoElement>(null);
+  const [text, setText] = useState(v.hook_s != null ? mmss(v.hook_s) : "");
+  const guess = v.duration_ms ? Math.round((v.duration_ms / 1000) * 0.33) : null;
+  const save = (sec: number | null) => post({ videoId: v.id, hook: sec });
+  return (
+    <div className="adm-hook">
+      {v.media_url && (
+        <video ref={ref} src={v.media_url} controls preload="metadata" playsInline
+          onLoadedMetadata={(e) => { if (v.hook_s != null) e.currentTarget.currentTime = v.hook_s; }} />
+      )}
+      <div className="acts">
+        <span>
+          Hook: {v.hook_s != null ? mmss(v.hook_s) : guess != null ? `guess ${mmss(guess)}` : "guess"}
+        </span>
+        {v.media_url && (
+          <button className="btn ghost" onClick={() => ref.current && save(Math.round(ref.current.currentTime))}>
+            Set hook here
+          </button>
+        )}
+        <input value={text} onChange={(e) => setText(e.target.value)} placeholder="m:ss" aria-label="Hook time" size={6} />
+        <button className="btn ghost" onClick={() => { const t = parseTime(text); if (t != null) save(t); }}>
+          Save time
+        </button>
+        {v.hook_s != null && (
+          <button className="btn ghost" onClick={() => save(null)}>
+            Clear
+          </button>
+        )}
+      </div>
+    </div>
   );
 }
 

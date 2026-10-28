@@ -32,6 +32,8 @@ type Found = {
   views?: number | null;
   likes?: number | null;
   postedAt?: string | null;
+  mediaUrl?: string | null;
+  durationMs?: number | null;
 };
 
 type XTweet = {
@@ -41,7 +43,23 @@ type XTweet = {
   likeCount?: number;
   viewCount?: number;
   author?: { userName?: string };
+  extendedEntities?: {
+    media?: {
+      type?: string;
+      video_info?: { duration_millis?: number; variants?: { content_type?: string; bitrate?: number; url?: string }[] };
+    }[];
+  };
 };
+
+// Picks a mid-quality MP4 (smooth enough, light enough to start fast) from a tweet's video.
+export function tweetVideo(t: XTweet): { mediaUrl: string | null; durationMs: number | null } {
+  const media = t.extendedEntities?.media?.find((m) => m.type === "video" || m.type === "animated_gif");
+  const mp4s = (media?.video_info?.variants ?? [])
+    .filter((v) => v.content_type === "video/mp4" && v.url)
+    .sort((a, b) => (a.bitrate ?? 0) - (b.bitrate ?? 0));
+  const pick = mp4s.filter((v) => (v.bitrate ?? 0) <= 2_500_000).pop() ?? mp4s[0];
+  return { mediaUrl: pick?.url ?? null, durationMs: media?.video_info?.duration_millis ?? null };
+}
 
 export function sceneFor(text: string): Scene | null {
   if (/claudia|anabology/i.test(text)) return "claudia";
@@ -93,6 +111,7 @@ async function searchX(key: string, log: QueryLog[], lookback: number): Promise<
         views: t.viewCount ?? null,
         likes: t.likeCount ?? null,
         postedAt: toDate(t.createdAt),
+        ...tweetVideo(t),
       });
     }
   }
@@ -163,7 +182,13 @@ async function refreshXStats(key: string, log: QueryLog[]): Promise<number> {
   await saveVideoStats(
     stale.map((v) => {
       const t = byId.get(v.embed_id);
-      return { id: v.id, views: t?.viewCount ?? null, likes: t?.likeCount ?? null, postedAt: toDate(t?.createdAt) };
+      return {
+        id: v.id,
+        views: t?.viewCount ?? null,
+        likes: t?.likeCount ?? null,
+        postedAt: toDate(t?.createdAt),
+        ...(t ? tweetVideo(t) : {}),
+      };
     }),
   );
   log.push({ source: "x-stats", query: `${stale.length} ids`, status: r.status, results: byId.size });
