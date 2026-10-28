@@ -276,7 +276,7 @@ body:has(.hero-vote) .wrap { max-width: 1560px; padding-inline: 24px; }
 .card .embed-youtube iframe { height: auto; aspect-ratio: 16 / 9; }
 @media (min-width: 1100px) {
   .hero-vote { display: grid; grid-template-columns: auto 1fr; align-items: end; column-gap: 40px; }
-  .hero-vote .kicker { grid-column: 1 / -1; }
+  .hero-vote > :not(h1, .vote-how) { grid-column: 1 / -1; }
   .hero-vote .vote-how { margin: 0 0 8px; }
 }
 @media (max-width: 680px) {
