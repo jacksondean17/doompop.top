@@ -128,7 +128,7 @@ function Videos({ song }: { song: Song }) {
   const [main, ...rest] = song.videos;
   if (!main) return null;
   const link = (v: Song["videos"][number], cls?: string) => (
-    <PlayButton key={v.id} className={`vid-play${cls ? ` ${cls}` : ""}`} title={song.title} artist={song.artist} video={v}>
+    <PlayButton key={v.id} className={`vid-play${cls ? ` ${cls}` : ""}`} title={song.title} artist={song.artist} videos={song.videos} pick={v.id}>
       ▶ {videoLabel(v)}
     </PlayButton>
   );
@@ -310,14 +310,15 @@ export default async function Home({ searchParams }: { searchParams: Promise<Raw
               </div>
               <div className="song">
                 <div className="title">
-                  {s.videos[0] ? (
-                    <PlayButton className="title-play" title={s.title} artist={s.artist} video={s.videos[0]}>
+                  {s.videos[0] && (
+                    <PlayButton className="title-play" title={s.title} artist={s.artist} videos={s.videos}>
                       <span className="play-dot" aria-hidden="true">▶</span>
-                      {s.title}
+                      <span className="sr-only">Play {s.title}</span>
                     </PlayButton>
-                  ) : (
-                    s.title
                   )}
+                  <a className="title-link" href={`/song/${s.id}`}>
+                    {s.title}
+                  </a>
                   {s.scene && s.scene !== "other" && <span className={`badge scene-${s.scene}`}>{SCENES[s.scene]}</span>}
                 </div>
                 {s.artist && <div className="artist">{s.artist}</div>}

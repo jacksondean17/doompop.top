@@ -23,6 +23,8 @@ export type Video = {
   media_url: string | null; // direct MP4 (X), so the vote page can start at the hook
   duration_ms: number | null;
   hook_s: number | null; // where the catchy bit starts; null = guess
+  play_fails?: number; // times a visitor's player couldn't play it (reported by components/SongPlayer)
+  play_fail_reason?: string | null;
 };
 
 export type Song = {
@@ -117,6 +119,12 @@ function ensureSchema(): Promise<void> {
     await sql`ALTER TABLE videos ADD COLUMN IF NOT EXISTS media_url TEXT`;
     await sql`ALTER TABLE videos ADD COLUMN IF NOT EXISTS duration_ms INT`;
     await sql`ALTER TABLE videos ADD COLUMN IF NOT EXISTS hook_s DOUBLE PRECISION`;
+    // v4: lyrics, so agents that can't listen can still judge the words.
+    await sql`ALTER TABLE videos ADD COLUMN IF NOT EXISTS lyrics TEXT`;
+    await sql`ALTER TABLE videos ADD COLUMN IF NOT EXISTS lyrics_source TEXT`;
+    await sql`ALTER TABLE videos ADD COLUMN IF NOT EXISTS lyrics_tried_at TIMESTAMPTZ`;
+    await sql`ALTER TABLE videos ADD COLUMN IF NOT EXISTS audio_url TEXT`;
+    await sql`ALTER TABLE videos ADD COLUMN IF NOT EXISTS thumb_url TEXT`;
     await sql`
       INSERT INTO videos (song_id, url, platform, embed_id, artist, title, added_at)
       SELECT id, url, platform, embed_id, artist, title, submitted_at FROM songs
@@ -141,6 +149,8 @@ function ensureSchema(): Promise<void> {
     await sql`ALTER TABLE votes ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'human'`;
     await sql`ALTER TABLE votes ADD COLUMN IF NOT EXISTS agent_id INT`;
     await sql`ALTER TABLE votes ADD COLUMN IF NOT EXISTS reason TEXT`;
+    // What an agent says it took in before voting: video, audio, frames, thumbnail, lyrics, caption, title.
+    await sql`ALTER TABLE votes ADD COLUMN IF NOT EXISTS judged_on TEXT[]`;
     await sql`
       CREATE TABLE IF NOT EXISTS agents (
         id SERIAL PRIMARY KEY,
@@ -153,6 +163,10 @@ function ensureSchema(): Promise<void> {
         created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
         last_seen TIMESTAMPTZ
       )`;
+    // v5: which links don't play for visitors, so the admin can fix or replace them.
+    await sql`ALTER TABLE videos ADD COLUMN IF NOT EXISTS play_fails INT NOT NULL DEFAULT 0`;
+    await sql`ALTER TABLE videos ADD COLUMN IF NOT EXISTS play_fail_reason TEXT`;
+    await sql`ALTER TABLE videos ADD COLUMN IF NOT EXISTS play_fail_at TIMESTAMPTZ`;
     await sql`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, at TIMESTAMPTZ NOT NULL DEFAULT now())`;
     // v4: crossposts. dupe_of is the song a new arrival looked like; dismissed pairs stop being suggested.
     await sql`ALTER TABLE songs ADD COLUMN IF NOT EXISTS dupe_of INT REFERENCES songs(id) ON DELETE SET NULL`;
@@ -208,7 +222,8 @@ async function withVideos(songs: Omit<Song, "videos">[]): Promise<Song[]> {
   if (!songs.length) return [];
   const q = await db();
   const vids = (await q`
-    SELECT id, song_id, url, platform, embed_id, artist, views, likes, posted_at, media_url, duration_ms, hook_s FROM videos
+    SELECT id, song_id, url, platform, embed_id, artist, views, likes, posted_at, media_url, duration_ms, hook_s,
+           play_fails, play_fail_reason FROM videos
     WHERE song_id = ANY(${songs.map((s) => s.id)})
     ORDER BY views DESC NULLS LAST, likes DESC NULLS LAST, added_at ASC`) as Video[];
   const by = new Map<number, Video[]>();
@@ -291,10 +306,18 @@ export async function catalogue(f: CatalogueFilters = {}): Promise<{ songs: Song
   return { songs: await withVideos(rows), total, page };
 }
 
-// Matchups lean toward songs that have been played less and toward songs with more reach,
-// so a first-time voter meets the big songs first; the opponent is nearby in rating.
+// Human matchups are drawn at random from weights, so any song can come up. The first song is
+// weighted toward higher ratings (which include the views head start, so a first-time voter meets
+// the big songs first) and toward songs played less; MATCH_FLOOR of the time it is drawn uniformly.
+// The opponent is weighted toward songs nearby in rating. Each draw sorts by -ln(u) / weight,
+// which picks a row with probability proportional to its weight.
 // `exclude` holds songs this visitor just saw; pairs they already voted on are never served again.
 // Both fall away if the chart is too small to honour them.
+export const MATCH_TEMP = 200; // rating points per e-fold of weight
+export const MATCH_PLAYS_EXP = 0.5; // weight divides by (1 + plays)^this
+export const MATCH_FLOOR = 0.05; // share of first picks drawn uniformly
+export const MATCH_SPREAD = 150; // rating gap per e-fold of opponent weight
+
 export async function pickMatchup(
   opts: { exclude?: number[]; voter?: string; kind?: VoterKind } = {},
 ): Promise<[Song, Song] | null> {
@@ -303,17 +326,21 @@ export async function pickMatchup(
   const agent = opts.kind === "agent";
   const exclude = opts.exclude?.length ? opts.exclude : [0];
   const voter = opts.voter ?? "";
+  const uniform = Math.random() < MATCH_FLOOR;
   type Row = Omit<Song, "videos">;
   const pickA = async (avoid: number[]): Promise<Row[]> => (await q`
     SELECT ${SONG_COLS!} FROM songs s WHERE s.status = 'approved' AND s.id <> ALL(${avoid})
-    ORDER BY ${agent ? q`(s.agent_wins + s.agent_losses)` : q`(s.wins + s.losses) - s.prior / 50.0`} + random() * 14 ASC LIMIT 1`) as Row[];
+    ORDER BY ${agent ? q`(s.agent_wins + s.agent_losses) + random() * 14`
+      : uniform ? q`random()`
+      : q`-ln(1 - random()) * power(1 + s.wins + s.losses, ${MATCH_PLAYS_EXP}::float) / exp((s.rating - 1500) / ${MATCH_TEMP}::float)`} ASC LIMIT 1`) as Row[];
   const pickB = async (a: Row, avoid: number[], fresh: boolean): Promise<Row[]> => (await q`
     SELECT ${SONG_COLS!} FROM songs s
     WHERE s.status = 'approved' AND s.id <> ${a.id} AND s.id <> ALL(${avoid})
       ${fresh ? q`AND NOT EXISTS (
         SELECT 1 FROM votes v WHERE v.voter_hash = ${voter}
           AND ((v.winner_id = ${a.id} AND v.loser_id = s.id) OR (v.winner_id = s.id AND v.loser_id = ${a.id})))` : q``}
-    ORDER BY ${agent ? q`abs(s.agent_rating - ${a.agent_rating})` : q`abs(s.rating - ${a.rating})`} + random() * 400 ASC LIMIT 1`) as Row[];
+    ORDER BY ${agent ? q`abs(s.agent_rating - ${a.agent_rating}) + random() * 400`
+      : q`-ln(1 - random()) * exp(abs(s.rating - ${a.rating}) / ${MATCH_SPREAD}::float)`} ASC LIMIT 1`) as Row[];
 
   let [a] = await pickA(exclude);
   a ??= (await pickA([0]))[0];
@@ -335,7 +362,7 @@ export async function recordVote(
   winnerId: number,
   loserId: number,
   voterHash: string,
-  agent?: { id: number; reason: string | null },
+  agent?: { id: number; reason: string | null; judgedOn: string[] | null },
 ): Promise<number | null> {
   const q = await db();
   const kind: VoterKind = agent ? "agent" : "human";
@@ -352,8 +379,9 @@ export async function recordVote(
       FROM r WHERE w IS NOT NULL AND l IS NOT NULL
     ),
     ins AS (
-      INSERT INTO votes (nonce, winner_id, loser_id, voter_hash, delta, kind, agent_id, reason)
-      SELECT ${nonce}, ${winnerId}, ${loserId}, ${voterHash}, delta, ${kind}, ${agent?.id ?? null}, ${agent?.reason ?? null} FROM d
+      INSERT INTO votes (nonce, winner_id, loser_id, voter_hash, delta, kind, agent_id, reason, judged_on)
+      SELECT ${nonce}, ${winnerId}, ${loserId}, ${voterHash}, delta, ${kind}, ${agent?.id ?? null}, ${agent?.reason ?? null},
+             ${agent?.judgedOn ?? null}::text[] FROM d
       ON CONFLICT (nonce) DO NOTHING
       RETURNING delta
     ),
@@ -403,6 +431,8 @@ type NewVideo = {
   likes?: number | null;
   postedAt?: string | null;
   mediaUrl?: string | null;
+  audioUrl?: string | null;
+  thumbUrl?: string | null;
   durationMs?: number | null;
 };
 
@@ -428,9 +458,11 @@ async function insertSongWithVideo(v: NewVideo): Promise<Inserted> {
               ${v.postedAt ?? null}, ${dupe?.id ?? null})
       RETURNING id`;
     await tx`
-      INSERT INTO videos (song_id, url, platform, embed_id, artist, title, views, likes, posted_at, media_url, duration_ms, stats_at)
+      INSERT INTO videos (song_id, url, platform, embed_id, artist, title, views, likes, posted_at, media_url, audio_url,
+                          thumb_url, duration_ms, stats_at)
       VALUES (${song.id}, ${p.url}, ${p.platform}, ${p.embedId}, ${v.artist}, ${v.title}, ${v.views ?? null}, ${v.likes ?? null},
-              ${v.postedAt ?? null}, ${v.mediaUrl ?? null}, ${v.durationMs ?? null}, CASE WHEN ${v.views != null} THEN now() END)`;
+              ${v.postedAt ?? null}, ${v.mediaUrl ?? null}, ${v.audioUrl ?? null}, ${v.thumbUrl ?? null}, ${v.durationMs ?? null},
+              CASE WHEN ${v.views != null} THEN now() END)`;
     return "ok" as const;
   });
   return result === "ok" ? { result, dupe } : { result };
@@ -457,6 +489,8 @@ export async function addCandidate(f: {
   likes?: number | null;
   postedAt?: string | null;
   mediaUrl?: string | null;
+  audioUrl?: string | null;
+  thumbUrl?: string | null;
   durationMs?: number | null;
 }): Promise<boolean> {
   return (await insertSongWithVideo({ ...f, submittedBy: "bot" })).result === "ok";
@@ -588,6 +622,14 @@ export async function addVideo(
   });
 }
 
+export async function recordPlayFail(videoId: number, reason: string): Promise<boolean> {
+  const q = await db();
+  const r = await q`
+    UPDATE videos SET play_fails = play_fails + 1, play_fail_reason = ${reason}, play_fail_at = now()
+    WHERE id = ${videoId} RETURNING 1`;
+  return r.length > 0;
+}
+
 export async function setHook(videoId: number, seconds: number | null): Promise<boolean> {
   const q = await db();
   const r = await q`UPDATE videos SET hook_s = ${seconds} WHERE id = ${videoId} RETURNING 1`;
@@ -612,7 +654,10 @@ export async function saveVideoStats(
     likes: number | null;
     postedAt: string | null;
     mediaUrl?: string | null;
+    audioUrl?: string | null;
+    thumbUrl?: string | null;
     durationMs?: number | null;
+    text?: string | null; // the post's own text, used as the song's caption when it has none
   }[],
 ): Promise<void> {
   if (!stats.length) return;
@@ -623,9 +668,12 @@ export async function saveVideoStats(
       const [r] = await tx`
         UPDATE videos SET views = COALESCE(${s.views}, views), likes = COALESCE(${s.likes}, likes),
           posted_at = COALESCE(${s.postedAt}, posted_at), media_url = COALESCE(${s.mediaUrl ?? null}, media_url),
-          duration_ms = COALESCE(${s.durationMs ?? null}, duration_ms), stats_at = now()
+          duration_ms = COALESCE(${s.durationMs ?? null}, duration_ms),
+          audio_url = COALESCE(${s.audioUrl ?? null}, audio_url),
+          thumb_url = COALESCE(${s.thumbUrl ?? null}, thumb_url), stats_at = now()
         WHERE id = ${s.id} RETURNING song_id`;
       if (r) songIds.add(r.song_id);
+      if (r && s.text) await tx`UPDATE songs SET note = ${s.text.slice(0, 500)} WHERE id = ${r.song_id} AND note IS NULL`;
     }
     await refreshSongs(tx, [...songIds]);
   });
@@ -876,9 +924,12 @@ export type AgentSummary = { name: string; model: string | null; votes: number; 
 export type AgentVote = {
   agent: string;
   model: string | null;
+  winner_id: number;
+  loser_id: number;
   winner: string;
   loser: string;
   reason: string | null;
+  judged_on: string[] | null;
   created_at: string;
 };
 
@@ -925,7 +976,7 @@ export async function listAgents(): Promise<AgentSummary[]> {
 export async function recentAgentVotes(limit = 20): Promise<AgentVote[]> {
   const q = await db();
   return (await q`
-    SELECT a.name AS agent, a.model, w.title AS winner, l.title AS loser, v.reason, v.created_at
+    SELECT a.name AS agent, a.model, v.winner_id, v.loser_id, w.title AS winner, l.title AS loser, v.reason, v.judged_on, v.created_at
     FROM votes v
     JOIN agents a ON a.id = v.agent_id
     JOIN songs w ON w.id = v.winner_id
@@ -940,6 +991,51 @@ export async function setAgentDisabled(name: string, disabled: boolean): Promise
   return r.length > 0;
 }
 
+// ---- Lyrics -------------------------------------------------------------------------------------
+
+// Hand-entered and published lyrics beat machine transcriptions.
+const LYRICS_RANK = sql ? sql`CASE v.lyrics_source WHEN 'transcribed' THEN 1 ELSE 0 END` : null;
+
+export type SongLyrics = { lyrics: string; source: string };
+
+export type AgentMedia = { id: number; thumb_url: string | null; audio_url: string | null };
+
+// Extra per-video media only the agent API needs.
+export async function agentMediaFor(songIds: number[]): Promise<Map<number, AgentMedia>> {
+  const q = await db();
+  const rows = (await q`SELECT id, thumb_url, audio_url FROM videos WHERE song_id = ANY(${songIds})`) as AgentMedia[];
+  return new Map(rows.map((r) => [r.id, r]));
+}
+
+// Best lyrics per song across its videos, for the agent API only; humans never see them.
+export async function lyricsFor(songIds: number[]): Promise<Map<number, SongLyrics>> {
+  const q = await db();
+  const rows = (await q`
+    SELECT DISTINCT ON (v.song_id) v.song_id, v.lyrics, v.lyrics_source
+    FROM videos v WHERE v.song_id = ANY(${songIds}) AND v.lyrics IS NOT NULL
+    ORDER BY v.song_id, ${LYRICS_RANK!}, v.views DESC NULLS LAST`) as { song_id: number; lyrics: string; lyrics_source: string }[];
+  return new Map(rows.map((r) => [r.song_id, { lyrics: r.lyrics, source: r.lyrics_source }]));
+}
+
+export async function setLyrics(videoId: number, lyrics: string | null, source: string): Promise<boolean> {
+  const q = await db();
+  const r = await q`
+    UPDATE videos SET lyrics = ${lyrics}, lyrics_source = ${lyrics ? source : null}, lyrics_tried_at = now()
+    WHERE id = ${videoId} RETURNING 1`;
+  return r.length > 0;
+}
+
+// Videos with a fetchable audio file and no lyrics yet, biggest songs first. Failed tries wait a week.
+export async function videosNeedingLyrics(limit: number): Promise<{ id: number; audio_url: string; title: string }[]> {
+  const q = await db();
+  return (await q`
+    SELECT v.id, v.audio_url, s.title FROM videos v JOIN songs s ON s.id = v.song_id
+    WHERE v.audio_url IS NOT NULL AND v.lyrics IS NULL AND s.status = 'approved'
+      AND (v.lyrics_tried_at IS NULL OR v.lyrics_tried_at < now() - interval '7 days')
+      AND NOT EXISTS (SELECT 1 FROM videos o WHERE o.song_id = v.song_id AND o.lyrics IS NOT NULL)
+    ORDER BY s.views DESC LIMIT ${limit}`) as { id: number; audio_url: string; title: string }[];
+}
+
 // ---- Analytics -------------------------------------------------------------------------------
 
 export type StatSong = Pick<
@@ -947,7 +1043,7 @@ export type StatSong = Pick<
   "id" | "title" | "artist" | "scene" | "rating" | "prior" | "wins" | "losses" | "views" | "agent_rating" | "agent_wins" | "agent_losses"
 >;
 export type PairTally = { winner_id: number; loser_id: number; n: number };
-export type Upset = { winner: string; loser: string; delta: number; created_at: string };
+export type Upset = { winner_id: number; loser_id: number; winner: string; loser: string; delta: number; created_at: string };
 export type DayCount = { day: string; human: number; agent: number };
 
 export async function statSongs(): Promise<StatSong[]> {
@@ -971,7 +1067,7 @@ export async function pairTallies(ids: number[], by: VoterKind): Promise<PairTal
 export async function biggestUpsets(by: VoterKind, limit = 6): Promise<Upset[]> {
   const q = await db();
   return (await q`
-    SELECT w.title AS winner, l.title AS loser, v.delta, v.created_at
+    SELECT v.winner_id, v.loser_id, w.title AS winner, l.title AS loser, v.delta, v.created_at
     FROM votes v JOIN songs w ON w.id = v.winner_id JOIN songs l ON l.id = v.loser_id
     WHERE v.kind = ${by} AND v.delta > ${K_FACTOR / 2} AND w.status = 'approved' AND l.status = 'approved'
     ORDER BY v.delta DESC, v.created_at DESC LIMIT ${limit}`) as Upset[];
@@ -986,4 +1082,77 @@ export async function dailyVotes(days = 30): Promise<DayCount[]> {
     FROM generate_series(current_date - ${days - 1}::int, current_date, interval '1 day') d
     LEFT JOIN votes v ON v.created_at >= d AND v.created_at < d + interval '1 day'
     GROUP BY d ORDER BY d`) as DayCount[];
+}
+
+// ---- One song's page -------------------------------------------------------------------------
+
+export type SongVote = {
+  id: number;
+  kind: VoterKind;
+  won: boolean;
+  delta: number;
+  opponent_id: number;
+  opponent: string;
+  opponent_live: boolean; // approved, so it has a page to link to
+  agent: string | null;
+  reason: string | null;
+  created_at: string;
+};
+export type Opponent = { id: number; title: string; artist: string | null; live: boolean; hw: number; hl: number; aw: number; al: number };
+
+export async function songById(id: number): Promise<Song | null> {
+  if (!Number.isSafeInteger(id) || id <= 0 || id > 2147483647) return null;
+  const q = await db();
+  const rows = (await q`
+    SELECT ${SONG_COLS!},
+      (SELECT count(*)::int FROM votes v
+        WHERE (v.winner_id = s.id OR v.loser_id = s.id) AND v.kind = 'human'
+          AND v.created_at > now() - interval '7 days') AS recent_votes
+    FROM songs s WHERE s.id = ${id} AND s.status = 'approved'`) as Omit<Song, "videos">[];
+  return (await withVideos(rows))[0] ?? null;
+}
+
+// Every vote the song was in, oldest first. Agents' names and reasons are public (as on /agents).
+export async function songHistory(id: number, kind: VoterKind): Promise<SongVote[]> {
+  const q = await db();
+  return (await q`
+    SELECT v.id, v.kind, v.winner_id = ${id} AS won, v.delta,
+      o.id AS opponent_id, o.title AS opponent, o.status = 'approved' AS opponent_live,
+      CASE WHEN a.disabled THEN NULL ELSE a.name END AS agent,
+      CASE WHEN a.disabled THEN NULL ELSE v.reason END AS reason, v.created_at
+    FROM votes v
+    JOIN songs o ON o.id = CASE WHEN v.winner_id = ${id} THEN v.loser_id ELSE v.winner_id END
+    LEFT JOIN agents a ON a.id = v.agent_id
+    WHERE (v.winner_id = ${id} OR v.loser_id = ${id}) AND v.kind = ${kind}
+    ORDER BY v.created_at, v.id`) as SongVote[];
+}
+
+// Everyone the song has met, with its record against each from humans (hw/hl) and agents (aw/al).
+export async function songOpponents(id: number): Promise<Opponent[]> {
+  const q = await db();
+  return (await q`
+    SELECT o.id, o.title, o.artist, o.status = 'approved' AS live,
+      count(*) FILTER (WHERE v.kind = 'human' AND v.winner_id = ${id})::int AS hw,
+      count(*) FILTER (WHERE v.kind = 'human' AND v.loser_id = ${id})::int AS hl,
+      count(*) FILTER (WHERE v.kind = 'agent' AND v.winner_id = ${id})::int AS aw,
+      count(*) FILTER (WHERE v.kind = 'agent' AND v.loser_id = ${id})::int AS al
+    FROM votes v
+    JOIN songs o ON o.id = CASE WHEN v.winner_id = ${id} THEN v.loser_id ELSE v.winner_id END
+    WHERE v.winner_id = ${id} OR v.loser_id = ${id}
+    GROUP BY o.id
+    ORDER BY count(*) DESC, max(v.created_at) DESC
+    LIMIT 100`) as Opponent[];
+}
+
+// Place on the chart, ordered as leaderboard() orders it (rating, then views).
+export async function songRank(id: number, kind: VoterKind): Promise<{ rank: number; of: number } | null> {
+  const q = await db();
+  const r = q(RATING_COL[kind].rating);
+  const [row] = (await q`
+    SELECT 1 + count(*) FILTER (WHERE o.${r} > s.${r} OR (o.${r} = s.${r} AND o.views > s.views))::int AS rank,
+      count(*)::int AS of
+    FROM songs s, songs o
+    WHERE s.id = ${id} AND s.status = 'approved' AND o.status = 'approved'
+    GROUP BY s.id`) as { rank: number; of: number }[];
+  return row ?? null;
 }

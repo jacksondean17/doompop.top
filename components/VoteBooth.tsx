@@ -105,6 +105,11 @@ function SongCard({
       </button>
       <div className={`delta${state === "lost" ? " neg" : ""}`}>
         {delta !== null && state && (state === "won" ? `+${delta.toFixed(1)} Elo` : `−${delta.toFixed(1)} Elo`)}
+        {state && (
+          <a className="card-link" href={`/song/${song.id}`}>
+            song page →
+          </a>
+        )}
       </div>
     </div>
   );

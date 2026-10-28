@@ -25,3 +25,23 @@ export function videoLabel(v: { platform: Platform; views: number | null }): str
   const p = PLATFORM_LABEL[v.platform] ?? v.platform;
   return v.views ? `${p} · ${formatCount(v.views)}` : p;
 }
+
+export function ago(when: string | Date | null): string {
+  if (!when) return "";
+  const s = Math.max(0, (Date.now() - new Date(when).getTime()) / 1000);
+  if (s < 60) return "just now";
+  const units: [number, string][] = [
+    [60, "min"],
+    [3600, "h"],
+    [86400, "d"],
+    [604800, "w"],
+  ];
+  let out = "";
+  for (const [secs, label] of units) if (s >= secs) out = `${Math.floor(s / secs)}${label === "min" ? " min" : label}`;
+  return `${out} ago`;
+}
+
+export function day(when: string | Date | null): string {
+  if (!when) return "";
+  return new Date(when).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
+}
