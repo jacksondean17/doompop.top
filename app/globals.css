@@ -86,6 +86,38 @@ input:focus, textarea:focus { outline: none; border-color: var(--acid); }
 .admin-row .acts { display: flex; gap: 8px; flex-wrap: wrap; }
 .tabs { display: flex; gap: 6px; margin: 16px 0; }
 
+.filters { display: grid; gap: 10px; margin: 8px 0 0; padding: 16px 0; border-top: 1px solid var(--line); }
+.chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.chips-label { width: 56px; font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--blood); }
+.chip { font: inherit; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; text-decoration: none; color: var(--dim); background: transparent; border: 1px solid var(--line); padding: 4px 10px; cursor: pointer; white-space: nowrap; }
+.chip:hover { color: var(--ink); border-color: var(--ink); }
+.chip.on { color: #000; background: var(--acid); border-color: var(--acid); }
+.search { display: flex; gap: 8px; align-items: center; margin-top: 4px; }
+.search input { max-width: 320px; padding: 7px 10px; font-size: 14px; }
+.search .btn.ghost { font-size: 13px; padding: 7px 14px; }
+.reset { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--blood); }
+
+.song { min-width: 0; }
+.title { overflow-wrap: anywhere; }
+.vids { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 6px; font-size: 12px; color: var(--dim); }
+.vids a { text-decoration: none; white-space: nowrap; }
+.vids a:hover { color: var(--acid); }
+.vids a.main { color: var(--acid); font-weight: 700; }
+.vids details { display: contents; }
+.vids summary { cursor: pointer; list-style: none; color: var(--dim); text-decoration: underline dotted; }
+.vids summary::-webkit-details-marker { display: none; }
+.vids details[open] summary { color: var(--ink); }
+.vids details .vids { flex-basis: 100%; margin-top: 0; }
+.nums span { display: block; }
+.nums .views { color: var(--ink); }
+.badge.scene-claudia { border-color: var(--acid); color: var(--acid); }
+.badge.scene-slopcore { border-color: var(--blood); color: var(--blood); }
+.badge.scene-claude-pop { border-color: var(--ink); color: var(--ink); }
+
+.meta { font-size: 12px; color: var(--dim); margin-top: 2px; letter-spacing: .04em; }
+.versions { display: flex; flex-wrap: wrap; gap: 6px; }
+.versions .chip { font-size: 11px; padding: 3px 8px; }
+
 @media (max-width: 680px) {
   .versus { grid-template-columns: 1fr; }
   .vs { text-align: center; font-size: 32px; }
@@ -93,4 +125,9 @@ input:focus, textarea:focus { outline: none; border-color: var(--acid); }
   .rank { font-size: 32px; }
   .nums { grid-column: 2; text-align: left; }
   .nums strong { display: inline; font-size: 15px; margin-right: 8px; }
+  .nums span { display: inline; margin-right: 8px; }
+  .row { gap: 4px 12px; }
+  .title { font-size: 20px; }
+  .chips-label { width: 100%; }
+  .search input { max-width: none; flex: 1; min-width: 0; }
 }
