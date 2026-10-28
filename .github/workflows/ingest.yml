@@ -8,6 +8,6 @@ on:
 jobs:
   ingest:
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 6
     steps:
-      - run: curl -sS --max-time 90 https://doompop.top/api/ingest
+      - run: curl -sS --max-time 290 https://doompop.top/api/ingest

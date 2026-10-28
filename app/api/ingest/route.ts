@@ -3,7 +3,7 @@ import { runIngest } from "@/lib/ingest";
 import { isAdmin } from "@/lib/security";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 // Called by the scheduled GitHub Action and the daily Vercel cron.
 // Safe to expose: runs are throttled in the database and results only land in the moderation queue.
