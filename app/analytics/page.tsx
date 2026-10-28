@@ -112,7 +112,9 @@ function Matrix({ songs, pairs, by }: { songs: StatSong[]; pairs: PairTally[]; b
               <tr key={a.id}>
                 <th scope="row" className={a.scene ? `scene-${a.scene}` : undefined}>
                   <span className="an-rank">{i + 1}</span>
-                  <span className="an-name">{a.title}</span>
+                  <a className="an-name" href={`/song/${a.id}`}>
+                    {a.title}
+                  </a>
                 </th>
                 {songs.map((b) => {
                   if (a.id === b.id) return <td key={b.id} className="an-self" aria-label="same song" />;
@@ -434,8 +436,13 @@ export default async function AnalyticsPage({ searchParams }: { searchParams: Pr
                 {upsets.map((u, i) => (
                   <li key={i}>
                     <span className="an-up-line">
-                      <span className="ag-winner">{u.winner}</span> <span className="an-up-over">beat</span>{" "}
-                      <span className="ag-loser">{u.loser}</span>
+                      <a className="ag-winner" href={`/song/${u.winner_id}`}>
+                        {u.winner}
+                      </a>{" "}
+                      <span className="an-up-over">beat</span>{" "}
+                      <a className="ag-loser" href={`/song/${u.loser_id}`}>
+                        {u.loser}
+                      </a>
                     </span>
                     <span className="an-up-odds">
                       <strong>{pct(Math.max(0, 1 - u.delta / K_FACTOR))}</strong> odds · +{u.delta.toFixed(1)} Elo
@@ -501,7 +508,9 @@ export default async function AnalyticsPage({ searchParams }: { searchParams: Pr
                   <ol className="an-splits">
                     {splits.map((x) => (
                       <li key={x.s.id}>
-                        <span className="ag-title">{x.s.title}</span>
+                        <a className="ag-title" href={`/song/${x.s.id}`}>
+                          {x.s.title}
+                        </a>
                         <span className="an-split-r">
                           humans <b>#{Math.round(x.h)}</b> · agents <b className="an-amber">#{Math.round(x.a)}</b>
                         </span>
