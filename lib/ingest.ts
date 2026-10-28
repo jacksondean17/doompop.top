@@ -1,4 +1,4 @@
-import { addCandidate, claimIngestRun, saveVideoStats, staleVideos, type Scene } from "./db";
+import { addCandidate, claimIngestRun, saveVideoStats, setLyrics, staleVideos, videosNeedingLyrics, type Scene } from "./db";
 import { guessTitle } from "./preview";
 
 // Finds fresh doom pop on X (via twitterapi.io) and YouTube, and drops it in the moderation queue.
@@ -46,19 +46,30 @@ type XTweet = {
   extendedEntities?: {
     media?: {
       type?: string;
+      media_url_https?: string;
       video_info?: { duration_millis?: number; variants?: { content_type?: string; bitrate?: number; url?: string }[] };
     }[];
   };
 };
 
 // Picks a mid-quality MP4 (smooth enough, light enough to start fast) from a tweet's video.
-export function tweetVideo(t: XTweet): { mediaUrl: string | null; durationMs: number | null } {
+export function tweetVideo(t: XTweet): {
+  mediaUrl: string | null;
+  audioUrl: string | null; // the smallest MP4, light enough to send for transcription
+  thumbUrl: string | null;
+  durationMs: number | null;
+} {
   const media = t.extendedEntities?.media?.find((m) => m.type === "video" || m.type === "animated_gif");
   const mp4s = (media?.video_info?.variants ?? [])
     .filter((v) => v.content_type === "video/mp4" && v.url)
     .sort((a, b) => (a.bitrate ?? 0) - (b.bitrate ?? 0));
   const pick = mp4s.filter((v) => (v.bitrate ?? 0) <= 2_500_000).pop() ?? mp4s[0];
-  return { mediaUrl: pick?.url ?? null, durationMs: media?.video_info?.duration_millis ?? null };
+  return {
+    mediaUrl: pick?.url ?? null,
+    audioUrl: mp4s[0]?.url ?? null,
+    thumbUrl: media?.media_url_https ?? null,
+    durationMs: media?.video_info?.duration_millis ?? null,
+  };
 }
 
 export function sceneFor(text: string): Scene | null {
@@ -166,8 +177,8 @@ function decodeEntities(s: string): string {
 }
 
 // Keeps view and like counts current so the chart's reach head start tracks reality.
-async function refreshXStats(key: string, log: QueryLog[]): Promise<number> {
-  const stale = await staleVideos("x", 20, 100);
+async function refreshXStats(key: string, log: QueryLog[], maxAgeHours = 20): Promise<number> {
+  const stale = await staleVideos("x", maxAgeHours, 100);
   if (!stale.length) return 0;
   const url = new URL("https://api.twitterapi.io/twitter/tweets");
   url.searchParams.set("tweet_ids", stale.map((v) => v.embed_id).join(","));
@@ -187,7 +198,7 @@ async function refreshXStats(key: string, log: QueryLog[]): Promise<number> {
         views: t?.viewCount ?? null,
         likes: t?.likeCount ?? null,
         postedAt: toDate(t?.createdAt),
-        ...(t ? tweetVideo(t) : {}),
+        ...(t ? { ...tweetVideo(t), text: t.text ?? null } : {}),
       };
     }),
   );
@@ -195,11 +206,46 @@ async function refreshXStats(key: string, log: QueryLog[]): Promise<number> {
   return byId.size;
 }
 
+// Speech-to-text for songs nobody has typed lyrics for. Groq and OpenAI share the same Whisper API shape.
+const TRANSCRIBERS = [
+  { env: "GROQ_API_KEY", url: "https://api.groq.com/openai/v1/audio/transcriptions", model: "whisper-large-v3" },
+  { env: "OPENAI_API_KEY", url: "https://api.openai.com/v1/audio/transcriptions", model: "whisper-1" },
+];
+const MAX_AUDIO_BYTES = 24 * 1024 * 1024; // both APIs cap uploads at 25MB
+
+export async function transcribeSome(limit: number, log: QueryLog[]): Promise<number> {
+  const t = TRANSCRIBERS.find((x) => process.env[x.env]);
+  if (!t) return 0;
+  let done = 0;
+  for (const v of await videosNeedingLyrics(limit)) {
+    try {
+      const audio = await fetch(v.audio_url);
+      const bytes = Number(audio.headers.get("content-length") ?? 0);
+      if (!audio.ok || bytes > MAX_AUDIO_BYTES) throw new Error(`audio ${audio.status}, ${bytes} bytes`);
+      const form = new FormData();
+      form.set("file", new Blob([await audio.arrayBuffer()], { type: "video/mp4" }), "song.mp4");
+      form.set("model", t.model);
+      form.set("response_format", "text");
+      form.set("prompt", `Song lyrics. Title: ${v.title}.`);
+      const r = await fetch(t.url, { method: "POST", headers: { Authorization: `Bearer ${process.env[t.env]}` }, body: form });
+      if (!r.ok) throw new Error(`${r.status} ${(await r.text()).slice(0, 150)}`);
+      const text = (await r.text()).trim();
+      await setLyrics(v.id, text.length > 20 ? text : null, "transcribed");
+      done++;
+    } catch (e) {
+      await setLyrics(v.id, null, "transcribed"); // stamps the try so it waits a week
+      log.push({ source: "lyrics", query: v.title, status: "failed", results: 0, error: String(e).slice(0, 200) });
+    }
+  }
+  log.push({ source: "lyrics", query: `${t.env} ${t.model}`, status: 200, results: done });
+  return done;
+}
+
 export type IngestResult =
   | { skipped: "too_soon" | "no_sources" }
   | { found: number; added: number; sources: string[]; queries: QueryLog[] };
 
-export async function runIngest(force = false, lookback = LOOKBACK_SECONDS): Promise<IngestResult> {
+export async function runIngest(force = false, lookback = LOOKBACK_SECONDS, refreshAll = false): Promise<IngestResult> {
   const xKey = process.env.TWITTERAPI_IO_KEY;
   const ytKey = process.env.YOUTUBE_API_KEY;
   if (!xKey && !ytKey) return { skipped: "no_sources" };
@@ -216,7 +262,7 @@ export async function runIngest(force = false, lookback = LOOKBACK_SECONDS): Pro
   };
   if (xKey) {
     sources.push("x");
-    await refreshXStats(xKey, queries).catch(failed("x-stats"));
+    await refreshXStats(xKey, queries, refreshAll ? 0 : 20).catch(failed("x-stats"));
     await sleep(X_SPACING_MS);
     found.push(...(await searchX(xKey, queries, lookback).catch(failed("x"))));
   }
@@ -224,6 +270,8 @@ export async function runIngest(force = false, lookback = LOOKBACK_SECONDS): Pro
     sources.push("youtube");
     found.push(...(await searchYouTube(ytKey, queries).catch(failed("youtube"))));
   }
+  // Up to 4 songs a run, so a run stays well inside the function time limit.
+  await transcribeSome(4, queries).catch(failed("lyrics"));
   let added = 0;
   for (const f of found) {
     if (await addCandidate(f)) added++;

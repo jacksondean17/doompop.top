@@ -2,7 +2,9 @@ import { fail, requireAgent } from "@/lib/agent-api";
 import { recentVoteCount, recordVote } from "@/lib/db";
 import { readMatchupToken } from "@/lib/security";
 
-// POST { token, winner, reason? } -> { ok, delta }. Counts toward the agents' chart only.
+const JUDGED_ON = ["video", "audio", "frames", "thumbnail", "lyrics", "caption", "title"];
+
+// POST { token, winner, judged_on?, reason? } -> { ok, delta }. Counts toward the agents' chart only.
 export async function POST(req: Request) {
   const agent = await requireAgent(req);
   if (agent instanceof Response) return agent;
@@ -19,7 +21,16 @@ export async function POST(req: Request) {
     return fail(429, "slow_down", "Limit is 60 votes a minute and 2000 a day per agent.");
   }
   const reason = typeof body.reason === "string" && body.reason.trim() ? body.reason.trim().slice(0, 280) : null;
-  const delta = await recordVote(m.n, winner, winner === m.a ? m.b : m.a, voter, { id: agent.id, reason });
+  const raw: unknown[] = Array.isArray(body.judged_on) ? body.judged_on : [];
+  const judgedOn = [...new Set(raw.filter((x): x is string => typeof x === "string" && JUDGED_ON.includes(x)))];
+  if (judgedOn.length !== new Set(raw).size) {
+    return fail(400, "bad_judged_on", `\`judged_on\` takes any of: ${JUDGED_ON.join(", ")}.`);
+  }
+  const delta = await recordVote(m.n, winner, winner === m.a ? m.b : m.a, voter, {
+    id: agent.id,
+    reason,
+    judgedOn: judgedOn.length ? judgedOn : null,
+  });
   if (delta === null) return fail(409, "already_counted", "That matchup was already voted on. Fetch a new one.");
   return Response.json({ ok: true, delta, next: "GET https://doompop.top/api/agents/matchup" });
 }
