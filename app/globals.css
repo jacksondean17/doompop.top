@@ -276,3 +276,24 @@ input:hover, textarea:hover { border-color: #3d3b36; }
 .play-chip { margin-top: 8px; }
 .hooks-cta { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin: 16px 0 0; }
 .hooks-cta .hint { color: var(--dim); font-size: 13px; max-width: 420px; }
+
+/* In-page playback: chart rows play into a mini player docked at the bottom */
+.title-play, .vid-play { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; text-align: left; text-transform: inherit; letter-spacing: inherit; }
+.title-play:hover, .vid-play:hover { color: var(--acid); }
+.title-play .play-dot { display: inline-grid; place-items: center; width: 1.3em; height: 1.3em; margin-right: .35em; font-size: .6em; vertical-align: .25em; color: #000; background: var(--acid); border-radius: 50%; }
+.vid-play { white-space: nowrap; }
+.vid-play.main { color: var(--acid); font-weight: 700; }
+.mini { position: fixed; z-index: 30; right: 16px; bottom: 16px; width: min(380px, calc(100vw - 32px)); background: var(--panel); border: 1px solid var(--acid); box-shadow: 6px 6px 0 var(--blood), 0 10px 40px rgba(0, 0, 0, .6); }
+.mini-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+.mini-title { flex: 1; min-width: 0; display: grid; font-size: 12px; }
+.mini-title b { font-family: var(--display); font-weight: 400; font-size: 18px; text-transform: uppercase; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mini-title span { color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mini-out, .mini-close { flex: none; display: grid; place-items: center; width: 32px; height: 32px; color: var(--ink); background: none; border: 1px solid var(--line); text-decoration: none; font: inherit; cursor: pointer; }
+.mini-out:hover, .mini-close:hover { border-color: var(--acid); color: var(--acid); }
+.mini-video { display: block; width: 100%; max-height: 240px; background: #000; }
+.mini-embed { max-height: 320px; overflow: auto; }
+.mini-embed .embed { min-height: 0; }
+@media (max-width: 680px) {
+  .mini { right: 8px; left: 8px; width: auto; bottom: calc(76px + env(safe-area-inset-bottom)); box-shadow: 4px 4px 0 var(--blood); }
+  .mini-video { max-height: 200px; }
+}

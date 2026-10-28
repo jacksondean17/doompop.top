@@ -1,3 +1,4 @@
+import PlayButton from "@/components/PlayButton";
 import { hasDb, leaderboard, SCENES, stats, type ChartSort, type ChartWindow, type Scene, type Song } from "@/lib/db";
 import { formatCount, videoLabel } from "@/components/format";
 import HowItWorks from "@/components/HowItWorks";
@@ -97,9 +98,9 @@ function Videos({ song }: { song: Song }) {
   const [main, ...rest] = song.videos;
   if (!main) return null;
   const link = (v: Song["videos"][number], cls?: string) => (
-    <a key={v.id} className={cls} href={v.url} target="_blank" rel="noreferrer">
+    <PlayButton key={v.id} className={`vid-play${cls ? ` ${cls}` : ""}`} title={song.title} artist={song.artist} video={v}>
       ▶ {videoLabel(v)}
-    </a>
+    </PlayButton>
   );
   const shown = rest.slice(0, 2);
   const more = rest.slice(2);
@@ -245,9 +246,10 @@ export default async function Home({ searchParams }: { searchParams: Promise<Raw
               <div className="song">
                 <div className="title">
                   {s.videos[0] ? (
-                    <a href={s.videos[0].url} target="_blank" rel="noreferrer">
+                    <PlayButton className="title-play" title={s.title} artist={s.artist} video={s.videos[0]}>
+                      <span className="play-dot" aria-hidden="true">▶</span>
                       {s.title}
-                    </a>
+                    </PlayButton>
                   ) : (
                     s.title
                   )}

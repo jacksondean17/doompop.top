@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import MiniPlayer from "@/components/MiniPlayer";
 import Nav from "@/components/Nav";
 import VoteBar from "@/components/VoteBar";
 import "./globals.css";
@@ -7,6 +8,9 @@ export const metadata: Metadata = {
   title: "doompop.top — the doom 100",
   description: "Songs made by machines about the end of everything, ranked by Elo, two at a time.",
   metadataBase: new URL("https://doompop.top"),
+  // X's video CDN refuses MP4 requests that carry a referrer from other sites, so send none.
+  // YouTube embeds need one and opt back in on the iframe (components/Embed.tsx).
+  referrer: "no-referrer",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -42,6 +46,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             </p>
           </div>
         </footer>
+        <MiniPlayer />
         <VoteBar />
       </body>
     </html>
