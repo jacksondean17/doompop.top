@@ -4,7 +4,8 @@ import { addCandidate, claimIngestRun } from "./db";
 // Each source only runs when its key is configured.
 
 const X_QUERIES = [
-  `"doom pop" -filter:retweets`,
+  // "doom pop" alone matches a real post-punk genre and Funko Pops, so require an AI-music signal.
+  `"doom pop" (ai OR suno OR udio OR agi OR "ai generated") -funko -filter:retweets`,
   `(suno OR udio OR "ai song" OR "ai generated song" OR "ai music") (agi OR singularity OR "ai safety" OR alignment OR doom OR superintelligence OR "p(doom)") filter:videos -filter:retweets`,
 ];
 
