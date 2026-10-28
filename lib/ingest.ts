@@ -10,11 +10,11 @@ const WATCHLIST = ["anabology", "sappyalien", "niuniu255431", "JagTheHero", "sli
 // Two scenes so far: "slopcore" ("I gave Claude N hours…" music videos; Claudia is @anabology's
 // open character that others reuse) and "Claude-Pop" (code-drawn Clawd animations to AI-doom songs).
 const X_QUERIES = [
-  `(${WATCHLIST.map((h) => `from:${h}`).join(" OR ")}) filter:videos -filter:retweets`,
-  `(slopcore OR #slopcore OR (claudia (song OR suno OR "music video" OR anabology))) filter:videos min_faves:10 -filter:retweets`,
-  `("gave claude" OR "asked claude" OR "claude made" OR "claude wrote" OR "gave opus") (song OR "music video") filter:videos min_faves:10 -filter:retweets`,
-  `("claude-pop" OR "claude pop" OR clawd OR "p(doom)") (song OR "music video") filter:videos min_faves:20 -filter:retweets`,
-  `(song OR "music video") (agi OR singularity OR superintelligence OR "ai safety" OR alignment OR "ai bubble" OR "p(doom)" OR "pace the frontier") filter:videos min_faves:25 -filter:retweets`,
+  `(${WATCHLIST.map((h) => `from:${h}`).join(" OR ")}) filter:videos -filter:retweets -filter:replies`,
+  `(slopcore OR #slopcore OR (claudia (song OR suno OR "music video" OR anabology))) filter:videos min_faves:50 -solana -from:colossalmeiraz -from:slopcoresolana -filter:retweets -filter:replies`,
+  `("gave claude" OR "asked claude" OR "claude made" OR "claude wrote" OR "gave opus") (song OR "music video") filter:videos min_faves:10 -filter:retweets -filter:replies`,
+  `("claude-pop" OR "claude pop" OR clawd OR "p(doom)") (song OR "music video") filter:videos min_faves:20 -filter:retweets -filter:replies`,
+  `(song OR "music video") (agi OR singularity OR superintelligence OR "ai safety" OR alignment OR "ai bubble" OR "p(doom)" OR "pace the frontier") filter:videos min_faves:25 -filter:retweets -filter:replies`,
 ];
 
 const YT_QUERIES = ["AI doom song suno", "AGI singularity song AI generated", "AI alignment song"];
