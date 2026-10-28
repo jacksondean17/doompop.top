@@ -1,21 +1,36 @@
-import { addVideo, hasDb, setAgentDisabled, setHook, setLyrics, listByStatus, mergeSong, removeVideo, SCENES, splitVideo, stats, updateSong, type Scene, type Song } from "@/lib/db";
+import {
+  addVideo, dismissDuplicate, duplicatePairs, findDuplicates, hasDb, listByStatus, mergeSong, removeVideo, SCENES,
+  searchSongs, setAgentDisabled, setHook, setLyrics, splitVideo, stats, updateSong, type Scene, type Song,
+} from "@/lib/db";
 import { isAdmin } from "@/lib/security";
 
 export const dynamic = "force-dynamic";
 
 const STATUSES: Song["status"][] = ["pending", "approved", "rejected"];
 
+// ?status=… lists a tab, with duplicate hints for pending songs and likely duplicate pairs on the chart.
+// ?q=… finds any song by title, artist or link.
 export async function GET(req: Request) {
   if (!isAdmin(req)) return Response.json({ error: "nope" }, { status: 401 });
   if (!hasDb) return Response.json({ error: "offline" }, { status: 503 });
-  const status = new URL(req.url).searchParams.get("status") as Song["status"];
-  const [songs, s] = await Promise.all([listByStatus(STATUSES.includes(status) ? status : "pending"), stats()]);
-  return Response.json({ songs, stats: s });
+  const params = new URL(req.url).searchParams;
+  const q = params.get("q");
+  if (q !== null) return Response.json({ songs: await searchSongs(q.slice(0, 200)) });
+  const raw = params.get("status") as Song["status"];
+  const status = STATUSES.includes(raw) ? raw : "pending";
+  const [songs, s, hints, pairs] = await Promise.all([
+    listByStatus(status),
+    stats(),
+    status === "pending" ? findDuplicates() : {},
+    duplicatePairs(),
+  ]);
+  return Response.json({ songs, stats: s, hints, pairs });
 }
 
 // Body is one action:
 //   { id, status?, title?, artist?, scene? }   edit a song ("scene": null clears it)
 //   { id, mergeInto }                          move song id's videos and votes onto mergeInto
+//   { id, notDupeOf }                          stop suggesting id and notDupeOf as the same song
 //   { videoId, split: true }                   detach a video into its own pending song
 //   { videoId, remove: true }                  delete a video (a song keeps at least one)
 //   { id, addUrl, artist? }                    attach another link to song id
@@ -46,10 +61,10 @@ export async function POST(req: Request) {
 
   const id = Number(body.id);
   if (!Number.isInteger(id)) return Response.json({ error: "bad_id" }, { status: 400 });
-  if (body.mergeInto !== undefined) {
-    const into = Number(body.mergeInto);
-    if (!Number.isInteger(into)) return Response.json({ error: "bad_target" }, { status: 400 });
-    return Response.json({ ok: await mergeSong(id, into) });
+  if (body.mergeInto !== undefined || body.notDupeOf !== undefined) {
+    const other = Number(body.mergeInto ?? body.notDupeOf);
+    if (!Number.isInteger(other)) return Response.json({ error: "bad_target" }, { status: 400 });
+    return Response.json({ ok: await (body.mergeInto !== undefined ? mergeSong(id, other) : dismissDuplicate(id, other)) });
   }
   if (typeof body.addUrl === "string") {
     const r = await addVideo(id, body.addUrl, typeof body.artist === "string" ? body.artist.trim() || null : null);

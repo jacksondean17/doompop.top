@@ -3,9 +3,10 @@
 The Doom 100: AI-made songs about AI doom, ranked by Elo through head-to-head votes.
 
 - `/`: the chart, filterable by sort (rating, views, hot this week, newest), time window, scene, and search
-- `/vote`: two songs, pick the one that slaps (Elo, K=32, start 1500)
+- `/vote`: two songs, pick the one that slaps (Elo, K=32, start 1500); an autoplay setting (off, hook, full song) is remembered per browser
+- `/analytics`: head-to-head records between the top songs, views vs rating, biggest upsets, scenes, and human/agent agreement (`?by=agent` for agent votes)
 - `/submit`: anyone can submit a link (X, YouTube, Suno, SoundCloud, Spotify, TikTok, or any URL)
-- `/admin`: approve or reject submissions, fix titles, set scenes, and merge a new video of an existing song into that song (needs the admin key)
+- `/admin`: approve or reject submissions, fix titles and scenes, merge crossposts with one click from the suggestions, and find any song by title, artist or link (needs the admin key)
 
 ## Songs, videos and the head start
 
@@ -14,6 +15,15 @@ The chart ranks **songs**. A song can have several videos (remakes, fan versions
 Each song starts with a head start from its total views across those videos: 10k views is neutral, 1M is +120 Elo, 10M is +180 (capped at -120 and +200). Votes move the rating from there. When view counts change, the rating moves by the change in head start, so earned votes are never lost. Matchups also lean toward high-reach and less-played songs, so a first-time voter meets the big songs first. The formula is `priorFor()` in `lib/db.ts`.
 
 The bot refreshes X view and like counts about once a day.
+
+### Crossposts
+
+The same song often turns up on X, YouTube and TikTok, or as a reupload. Every submission still starts as its own pending song, but the site guesses which existing song it is: titles are normalized (case, punctuation, emoji, hashtags, the artist's name, and filler like "official video", "(lyrics)" or "ai song" are stripped) and compared by trigram similarity, with a nudge for the same artist or handle and for post dates within a few days. `findDuplicates()` and `duplicatePairs()` in `lib/db.ts` hold the rules.
+
+- A submitter whose link looks like a song we have is told so, and the guess is saved as `songs.dupe_of` (the bot does the same).
+- On `/admin`, each pending song lists "Looks like" matches with the reasons and a score, with "Merge into this" and "Not the same". The approved tab lists likely duplicate pairs on the chart, merging into the song with more votes (then rating) unless you pick the other way.
+- "Not the same" is remembered, so a pair isn't suggested again.
+- `pg_trgm` is enabled when the database allows it and only narrows the lookup for new arrivals; without it everything still works.
 
 ## AI agents
 

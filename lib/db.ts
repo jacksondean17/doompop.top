@@ -66,6 +66,7 @@ const sql = hasDb
   : null;
 
 let ready: Promise<void> | null = null;
+let trgm = false;
 
 // Schema is created and migrated lazily on first use so nobody has to run migrations.
 function ensureSchema(): Promise<void> {
@@ -161,6 +162,12 @@ function ensureSchema(): Promise<void> {
         last_seen TIMESTAMPTZ
       )`;
     await sql`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, at TIMESTAMPTZ NOT NULL DEFAULT now())`;
+    // v4: crossposts. dupe_of is the song a new arrival looked like; dismissed pairs stop being suggested.
+    await sql`ALTER TABLE songs ADD COLUMN IF NOT EXISTS dupe_of INT REFERENCES songs(id) ON DELETE SET NULL`;
+    await sql`CREATE TABLE IF NOT EXISTS dupe_dismissed (a INT NOT NULL, b INT NOT NULL, PRIMARY KEY (a, b))`;
+    // pg_trgm only narrows the lookup for new arrivals; scoring happens in TS, so it's optional.
+    await sql.savepoint((sp) => sp`CREATE EXTENSION IF NOT EXISTS pg_trgm`).catch(() => {});
+    trgm = (await sql`SELECT 1 FROM pg_extension WHERE extname = 'pg_trgm'`).length > 0;
     for (const s of SEED_SONGS) {
       const p = parseSource(s.url);
       if (!p) continue;
@@ -375,22 +382,26 @@ type NewVideo = {
   durationMs?: number | null;
 };
 
-// Every submission starts as its own pending song; an admin can merge it into an existing one.
-async function insertSongWithVideo(v: NewVideo): Promise<"ok" | "duplicate" | "invalid"> {
+type Inserted = { result: "ok" | "duplicate" | "invalid"; dupe?: DupeMatch };
+
+// Every submission starts as its own pending song; if it looks like a song we already have,
+// dupe_of records that so the admin can merge it with one click.
+async function insertSongWithVideo(v: NewVideo): Promise<Inserted> {
   const p = parseSource(v.url);
-  if (!p) return "invalid";
+  if (!p) return { result: "invalid" };
   const q = await db();
-  return q.begin(async (tx) => {
+  const dupe = (await findSongMatch(v)) ?? undefined;
+  const result = await q.begin(async (tx) => {
     const dup = await tx`SELECT 1 FROM videos WHERE url = ${p.url} UNION SELECT 1 FROM songs WHERE url = ${p.url}`;
     if (dup.length) return "duplicate" as const;
     const views = v.views ?? 0;
     const prior = priorFor(views);
     const [song] = await tx`
       INSERT INTO songs (url, title, artist, platform, embed_id, submitted_by, note, submitter_hash,
-                         scene, views, likes, prior, rating, released_at)
+                         scene, views, likes, prior, rating, released_at, dupe_of)
       VALUES (${p.url}, ${v.title}, ${v.artist}, ${p.platform}, ${p.embedId}, ${v.submittedBy}, ${v.note},
               ${v.submitterHash ?? null}, ${v.scene ?? null}, ${views}, ${v.likes ?? 0}, ${prior}, ${1500 + prior},
-              ${v.postedAt ?? null})
+              ${v.postedAt ?? null}, ${dupe?.id ?? null})
       RETURNING id`;
     await tx`
       INSERT INTO videos (song_id, url, platform, embed_id, artist, title, views, likes, posted_at, media_url, audio_url,
@@ -400,6 +411,7 @@ async function insertSongWithVideo(v: NewVideo): Promise<"ok" | "duplicate" | "i
               CASE WHEN ${v.views != null} THEN now() END)`;
     return "ok" as const;
   });
+  return result === "ok" ? { result, dupe } : { result };
 }
 
 export async function submitSong(input: {
@@ -409,7 +421,7 @@ export async function submitSong(input: {
   submittedBy: string | null;
   note: string | null;
   submitterHash: string;
-}): Promise<"ok" | "duplicate" | "invalid"> {
+}): Promise<Inserted> {
   return insertSongWithVideo(input);
 }
 
@@ -427,7 +439,7 @@ export async function addCandidate(f: {
   thumbUrl?: string | null;
   durationMs?: number | null;
 }): Promise<boolean> {
-  return (await insertSongWithVideo({ ...f, submittedBy: "bot" })) === "ok";
+  return (await insertSongWithVideo({ ...f, submittedBy: "bot" })).result === "ok";
 }
 
 export async function listByStatus(status: Song["status"]): Promise<Song[]> {
@@ -615,6 +627,223 @@ export async function stats(): Promise<{ songs: number; votes: number; pending: 
   return r;
 }
 
+// ---- Crossposts and duplicates ----------------------------------------------------------------
+// The same song often shows up several times (X, YouTube, TikTok, reuploads). Matching is cheap and
+// explainable: normalized title trigram similarity, nudged by the same artist and close post dates.
+
+export type DupeMatch = {
+  id: number;
+  title: string;
+  artist: string | null;
+  status: Song["status"];
+  rating: number;
+  views: number;
+  votes: number;
+  score: number;
+  reasons: string[];
+};
+export type DupePair = { from: DupeMatch; into: DupeMatch; score: number; reasons: string[] };
+
+type DupeRow = Omit<DupeMatch, "score" | "reasons"> & {
+  dupe_of: number | null;
+  titles: string[]; // titles the song's videos arrived with
+  handles: string[];
+  dates: (string | Date)[];
+};
+type Prepared = { row: DupeRow; names: string[]; grams: Set<string>[]; keys: Set<string>; dates: number[] };
+
+const NOISE =
+  /\b(official\s+)?(music\s+|lyric\s+)?(video|audio|visuali[sz]er|mv)\b|\blyrics?\b|\bfull (song|version)\b|\bai[\s-]*(generated\s+)?(song|music)\b|\bsuno( ai)?\b|\bdoom\s*pop\b|\b(hd|4k|official)\b/g;
+
+const artistKey = (a: string) => a.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
+
+// "Paperclip Maximizer (Official Video) | @foo #doompop 🤖" -> "paperclip maximizer"
+export function normTitle(title: string, artists: (string | null)[] = []): string {
+  let t = title.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase();
+  t = t.replace(/https?:\/\/\S+/g, " ").replace(/[#@][\p{L}\p{N}_]+/gu, " ").replace(/[([{【][^)\]}】]*[)\]}】]/g, " ");
+  t = ` ${t.replace(NOISE, " ").replace(/[^\p{L}\p{N}\s]/gu, " ").replace(/\s+/g, " ")} `;
+  for (const a of artists) {
+    const n = a?.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, " ").replace(/\s+/g, " ").trim();
+    if (n && n.length >= 3) t = t.replaceAll(` ${n} `, " ");
+  }
+  return t.trim().replace(/\s+(by|ft|feat|prod)$/, "").replace(/^(by|ft|feat)\s+/, "");
+}
+
+// Same trigram scheme as pg_trgm: each word padded "  w ", similarity = shared / all.
+function trigrams(t: string): Set<string> {
+  const g = new Set<string>();
+  for (const w of t.split(" ").filter(Boolean)) {
+    const p = `  ${w} `;
+    for (let i = 0; i + 3 <= p.length; i++) g.add(p.slice(i, i + 3));
+  }
+  return g;
+}
+function jaccard(a: Set<string>, b: Set<string>): number {
+  if (!a.size || !b.size) return 0;
+  let n = 0;
+  for (const x of a) if (b.has(x)) n++;
+  return n / (a.size + b.size - n);
+}
+
+function prepare(row: DupeRow): Prepared {
+  const artists = [row.artist, ...row.handles];
+  const names = [...new Set([row.title, ...row.titles].map((t) => normTitle(t, artists)).filter(Boolean))];
+  return {
+    row,
+    names,
+    grams: names.map(trigrams),
+    keys: new Set(artists.filter((a): a is string => Boolean(a)).map(artistKey).filter((k) => k.length >= 2)),
+    dates: row.dates.map((d) => new Date(d).getTime()).filter((d) => !Number.isNaN(d)),
+  };
+}
+
+function compare(a: Prepared, b: Prepared): { score: number; reasons: string[] } | null {
+  let sim = 0;
+  a.names.forEach((x, i) =>
+    b.names.forEach((y, j) => {
+      const [short, long] = x.length <= y.length ? [x, y] : [y, x];
+      // One title wrapped in extra words: "paperclip maximizer" in "paperclip maximizer agi anthem".
+      const inside = short.length >= 6 && ` ${long} `.includes(` ${short} `) ? 0.85 : 0;
+      sim = Math.max(sim, x === y ? 1 : jaccard(a.grams[i], b.grams[j]), inside);
+    }),
+  );
+  if (sim < 0.45) return null;
+  const reasons = [sim === 1 ? "same title" : `title ${Math.round(sim * 100)}% alike`];
+  let score = sim;
+  const near = (k: string, m: string) => k === m || (Math.min(k.length, m.length) >= 4 && (k.includes(m) || m.includes(k)));
+  const shared = [...a.keys].find((k) => [...b.keys].some((m) => near(k, m)));
+  if (shared) {
+    score += 0.15;
+    reasons.push(`same artist (${shared})`);
+  } else if (a.keys.size && b.keys.size) {
+    score -= 0.15;
+    reasons.push("different artist");
+  }
+  let gap = Infinity;
+  for (const x of a.dates) for (const y of b.dates) gap = Math.min(gap, Math.abs(x - y) / 864e5);
+  if (gap <= 3) {
+    score += 0.1;
+    reasons.push(gap < 1 ? "posted the same day" : `posted ${Math.round(gap)} days apart`);
+  }
+  score = Math.round(Math.min(1, score) * 100) / 100;
+  return score >= 0.6 ? { score, reasons } : null;
+}
+
+const asMatch = (r: DupeRow, m: { score: number; reasons: string[] }): DupeMatch => ({
+  id: r.id, title: r.title, artist: r.artist, status: r.status, rating: r.rating, views: r.views, votes: r.votes, ...m,
+});
+
+// Every non-rejected song with its videos' titles, handles and dates. With pg_trgm, `near` narrows
+// the rows to titles that loosely resemble it first.
+async function dupeRows(near?: string): Promise<DupeRow[]> {
+  const q = await db();
+  return (await q`
+    SELECT s.id, s.title, s.artist, s.status, s.rating, s.views, (s.wins + s.losses) AS votes, s.dupe_of,
+      COALESCE(array_agg(v.title) FILTER (WHERE v.title IS NOT NULL), '{}') AS titles,
+      COALESCE(array_agg(v.artist) FILTER (WHERE v.artist IS NOT NULL), '{}') AS handles,
+      COALESCE(array_agg(v.posted_at) FILTER (WHERE v.posted_at IS NOT NULL), '{}') AS dates
+    FROM songs s LEFT JOIN videos v ON v.song_id = s.id
+    WHERE s.status <> 'rejected'
+      ${near ? q`AND s.id IN (
+        SELECT s2.id FROM songs s2 WHERE word_similarity(${near}, lower(s2.title)) > 0.3 OR word_similarity(lower(s2.title), ${near}) > 0.3
+        UNION SELECT w.song_id FROM videos w WHERE word_similarity(${near}, lower(w.title)) > 0.3)` : q``}
+    GROUP BY s.id`) as DupeRow[];
+}
+
+const pairKey = (a: number, b: number) => (a < b ? `${a}:${b}` : `${b}:${a}`);
+async function dismissed(): Promise<Set<string>> {
+  const q = await db();
+  return new Set((await q`SELECT a, b FROM dupe_dismissed`).map((r) => pairKey(r.a, r.b)));
+}
+
+// Likely-same approved/pending songs for each given song (default: every pending song), best first.
+// The song a new arrival was flagged as on submission (dupe_of) always comes first.
+export async function findDuplicates(ids?: number[]): Promise<Record<number, DupeMatch[]>> {
+  const [rows, skip] = await Promise.all([dupeRows(), dismissed()]);
+  const all = rows.map(prepare);
+  const want = new Set(ids ?? rows.filter((r) => r.status === "pending").map((r) => r.id));
+  const out: Record<number, DupeMatch[]> = {};
+  for (const a of all) {
+    if (!want.has(a.row.id)) continue;
+    const hits: DupeMatch[] = [];
+    for (const b of all) {
+      if (b === a || skip.has(pairKey(a.row.id, b.row.id))) continue;
+      const m = compare(a, b);
+      const flagged = a.row.dupe_of === b.row.id;
+      if (!m && !flagged) continue;
+      const hit = asMatch(b.row, m ?? { score: 0, reasons: [] });
+      if (flagged) hit.reasons.unshift("flagged on arrival");
+      hits.push(hit);
+    }
+    const first = (h: DupeMatch) => Number(h.id === a.row.dupe_of);
+    out[a.row.id] = hits.sort((x, y) => first(y) - first(x) || y.score - x.score || keeperFirst(x, y)).slice(0, 3);
+  }
+  return out;
+}
+
+// The keeper of a pair: more votes, then higher rating, then more views.
+function keeperFirst(a: DupeMatch, b: DupeMatch): number {
+  return b.votes - a.votes || b.rating - a.rating || b.views - a.views;
+}
+
+// Likely duplicate pairs among approved songs, each pointing from the one to fold into the keeper.
+export async function duplicatePairs(limit = 40): Promise<DupePair[]> {
+  const [rows, skip] = await Promise.all([dupeRows(), dismissed()]);
+  const all = rows.filter((r) => r.status === "approved").map(prepare);
+  const pairs: DupePair[] = [];
+  for (let i = 0; i < all.length; i++)
+    for (let j = i + 1; j < all.length; j++) {
+      if (skip.has(pairKey(all[i].row.id, all[j].row.id))) continue;
+      const m = compare(all[i], all[j]);
+      if (!m) continue;
+      const [into, from] = [asMatch(all[i].row, m), asMatch(all[j].row, m)].sort(keeperFirst);
+      pairs.push({ from, into, ...m });
+    }
+  return pairs.sort((a, b) => b.score - a.score).slice(0, limit);
+}
+
+// The closest existing song to a new arrival, if close enough to tell the submitter.
+async function findSongMatch(v: { title: string; artist: string | null; postedAt?: string | null }): Promise<DupeMatch | null> {
+  const n = normTitle(v.title, [v.artist]);
+  if (!n) return null;
+  const me = prepare({
+    id: 0, title: v.title, artist: v.artist, status: "pending", rating: 0, views: 0, votes: 0, dupe_of: null,
+    titles: [], handles: [], dates: v.postedAt ? [v.postedAt] : [],
+  });
+  let best: DupeMatch | null = null;
+  for (const r of await dupeRows(trgm ? n : undefined)) {
+    const m = compare(me, prepare(r));
+    if (!m || m.score < 0.7) continue;
+    if (!best || m.score > best.score || (m.score === best.score && r.status === "approved")) best = asMatch(r, m);
+  }
+  return best;
+}
+
+export async function dismissDuplicate(a: number, b: number): Promise<boolean> {
+  if (a === b) return false;
+  const q = await db();
+  await q`INSERT INTO dupe_dismissed (a, b) VALUES (${Math.min(a, b)}, ${Math.max(a, b)}) ON CONFLICT DO NOTHING`;
+  await q`UPDATE songs SET dupe_of = NULL WHERE (id = ${a} AND dupe_of = ${b}) OR (id = ${b} AND dupe_of = ${a})`;
+  return true;
+}
+
+// Any song, whatever its status, by title, artist, a video's title or handle, or a link.
+export async function searchSongs(text: string): Promise<Song[]> {
+  const t = text.trim();
+  if (!t) return [];
+  const q = await db();
+  const p = /^https?:\/\//i.test(t) ? parseSource(t) : null;
+  const like = `%${t.replace(/[%_\\]/g, "\\$&")}%`;
+  const rows = (await q`
+    SELECT ${SONG_COLS!} FROM songs s
+    WHERE s.title ILIKE ${like} OR s.artist ILIKE ${like}
+      OR EXISTS (SELECT 1 FROM videos v WHERE v.song_id = s.id AND (
+        v.title ILIKE ${like} OR v.artist ILIKE ${like} OR v.url ILIKE ${like} OR v.url = ${p?.url ?? ""}
+        OR (v.platform = ${p?.platform ?? ""} AND v.embed_id <> '' AND v.embed_id = ${p?.embedId ?? ""})))
+    ORDER BY (s.status = 'approved') DESC, s.rating DESC LIMIT 20`) as Omit<Song, "videos">[];
+  return withVideos(rows);
+}
+
 // Atomically claims the next bot run if the last one was long enough ago.
 export async function claimIngestRun(minSeconds: number): Promise<boolean> {
   const q = await db();
@@ -741,4 +970,52 @@ export async function videosNeedingLyrics(limit: number): Promise<{ id: number; 
       AND (v.lyrics_tried_at IS NULL OR v.lyrics_tried_at < now() - interval '7 days')
       AND NOT EXISTS (SELECT 1 FROM videos o WHERE o.song_id = v.song_id AND o.lyrics IS NOT NULL)
     ORDER BY s.views DESC LIMIT ${limit}`) as { id: number; audio_url: string; title: string }[];
+}
+
+// ---- Analytics -------------------------------------------------------------------------------
+
+export type StatSong = Pick<
+  Song,
+  "id" | "title" | "artist" | "scene" | "rating" | "prior" | "wins" | "losses" | "views" | "agent_rating" | "agent_wins" | "agent_losses"
+>;
+export type PairTally = { winner_id: number; loser_id: number; n: number };
+export type Upset = { winner: string; loser: string; delta: number; created_at: string };
+export type DayCount = { day: string; human: number; agent: number };
+
+export async function statSongs(): Promise<StatSong[]> {
+  const q = await db();
+  return (await q`
+    SELECT id, title, artist, scene, rating, prior, wins, losses, views, agent_rating, agent_wins, agent_losses
+    FROM songs WHERE status = 'approved'`) as StatSong[];
+}
+
+// How often each song beat each other one, for every pair within `ids` that has met.
+export async function pairTallies(ids: number[], by: VoterKind): Promise<PairTally[]> {
+  if (!ids.length) return [];
+  const q = await db();
+  return (await q`
+    SELECT winner_id, loser_id, count(*)::int AS n FROM votes
+    WHERE kind = ${by} AND winner_id = ANY(${ids}) AND loser_id = ANY(${ids})
+    GROUP BY winner_id, loser_id`) as PairTally[];
+}
+
+// The bigger the Elo delta, the less the winner was expected to win; over K/2 means the underdog won.
+export async function biggestUpsets(by: VoterKind, limit = 6): Promise<Upset[]> {
+  const q = await db();
+  return (await q`
+    SELECT w.title AS winner, l.title AS loser, v.delta, v.created_at
+    FROM votes v JOIN songs w ON w.id = v.winner_id JOIN songs l ON l.id = v.loser_id
+    WHERE v.kind = ${by} AND v.delta > ${K_FACTOR / 2} AND w.status = 'approved' AND l.status = 'approved'
+    ORDER BY v.delta DESC, v.created_at DESC LIMIT ${limit}`) as Upset[];
+}
+
+export async function dailyVotes(days = 30): Promise<DayCount[]> {
+  const q = await db();
+  return (await q`
+    SELECT to_char(d, 'YYYY-MM-DD') AS day,
+      count(v.id) FILTER (WHERE v.kind = 'human')::int AS human,
+      count(v.id) FILTER (WHERE v.kind = 'agent')::int AS agent
+    FROM generate_series(current_date - ${days - 1}::int, current_date, interval '1 day') d
+    LEFT JOIN votes v ON v.created_at >= d AND v.created_at < d + interval '1 day'
+    GROUP BY d ORDER BY d`) as DayCount[];
 }
