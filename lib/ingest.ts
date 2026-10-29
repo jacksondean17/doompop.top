@@ -72,6 +72,23 @@ export function tweetVideo(t: XTweet): {
   };
 }
 
+// Hand-added posts would otherwise show as a full tweet until the next ingest run fills in the MP4.
+// Best effort: no key, a rate limit or a post without video just leaves that to the refresh.
+export async function fetchTweetVideo(id: string): Promise<ReturnType<typeof tweetVideo> | null> {
+  const key = process.env.TWITTERAPI_IO_KEY;
+  if (!key) return null;
+  try {
+    const url = new URL("https://api.twitterapi.io/twitter/tweets");
+    url.searchParams.set("tweet_ids", id);
+    const r = await fetch(url, { headers: { "X-API-Key": key }, signal: AbortSignal.timeout(8000) });
+    if (!r.ok) return null;
+    const t = ((await r.json()) as { tweets?: XTweet[] }).tweets?.[0];
+    return t ? tweetVideo(t) : null;
+  } catch {
+    return null;
+  }
+}
+
 export function sceneFor(text: string): Scene | null {
   if (/claudia|anabology/i.test(text)) return "claudia";
   if (/clawd|claude[- ]pop|p\(doom\)/i.test(text)) return "claude-pop";

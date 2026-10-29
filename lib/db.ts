@@ -384,6 +384,14 @@ export async function recentSubmissionCount(hash: string, seconds: number): Prom
   return r.n;
 }
 
+// A post's direct video, for X posts where we could read it.
+type VideoMedia = {
+  mediaUrl?: string | null;
+  audioUrl?: string | null;
+  thumbUrl?: string | null;
+  durationMs?: number | null;
+};
+
 type NewVideo = {
   url: string;
   title: string;
@@ -395,11 +403,7 @@ type NewVideo = {
   views?: number | null;
   likes?: number | null;
   postedAt?: string | null;
-  mediaUrl?: string | null;
-  audioUrl?: string | null;
-  thumbUrl?: string | null;
-  durationMs?: number | null;
-};
+} & VideoMedia;
 
 type Inserted = { result: "ok" | "duplicate" | "invalid"; dupe?: DupeMatch };
 
@@ -440,7 +444,7 @@ export async function submitSong(input: {
   submittedBy: string | null;
   note: string | null;
   submitterHash: string;
-}): Promise<Inserted> {
+} & VideoMedia): Promise<Inserted> {
   return insertSongWithVideo(input);
 }
 
@@ -570,6 +574,7 @@ export async function addVideo(
   songId: number,
   url: string,
   artist: string | null,
+  media: VideoMedia = {},
 ): Promise<"ok" | "duplicate" | "invalid" | "missing"> {
   const p = parseSource(url);
   if (!p) return "invalid";
@@ -578,8 +583,9 @@ export async function addVideo(
     const [song] = await tx`SELECT title FROM songs WHERE id = ${songId}`;
     if (!song) return "missing" as const;
     const r = await tx`
-      INSERT INTO videos (song_id, url, platform, embed_id, artist, title)
-      VALUES (${songId}, ${p.url}, ${p.platform}, ${p.embedId}, ${artist}, ${song.title})
+      INSERT INTO videos (song_id, url, platform, embed_id, artist, title, media_url, audio_url, thumb_url, duration_ms)
+      VALUES (${songId}, ${p.url}, ${p.platform}, ${p.embedId}, ${artist}, ${song.title}, ${media.mediaUrl ?? null},
+              ${media.audioUrl ?? null}, ${media.thumbUrl ?? null}, ${media.durationMs ?? null})
       ON CONFLICT (url) DO NOTHING RETURNING id`;
     if (!r.length) return "duplicate" as const;
     await refreshSongs(tx, [songId]);

@@ -3,6 +3,8 @@ import {
   searchSongs, setAgentDisabled, setHook, setLyrics, splitVideo, stats, updateAgentVote, updateSong, type Scene,
   type Song,
 } from "@/lib/db";
+import { parseSource } from "@/lib/embed";
+import { fetchTweetVideo } from "@/lib/ingest";
 import { MODALITY_KEYS } from "@/lib/modalities";
 import { isAdmin } from "@/lib/security";
 
@@ -78,7 +80,9 @@ export async function POST(req: Request) {
     return Response.json({ ok: await (body.mergeInto !== undefined ? mergeSong(id, other) : dismissDuplicate(id, other)) });
   }
   if (typeof body.addUrl === "string") {
-    const r = await addVideo(id, body.addUrl, typeof body.artist === "string" ? body.artist.trim() || null : null);
+    const p = parseSource(body.addUrl);
+    const media = p?.platform === "x" ? await fetchTweetVideo(p.embedId) : null;
+    const r = await addVideo(id, body.addUrl, typeof body.artist === "string" ? body.artist.trim() || null : null, media ?? {});
     return Response.json({ ok: r === "ok", result: r });
   }
   await updateSong(id, {

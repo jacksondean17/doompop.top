@@ -1,4 +1,6 @@
 import { hasDb, recentSubmissionCount, submitSong } from "@/lib/db";
+import { parseSource } from "@/lib/embed";
+import { fetchTweetVideo } from "@/lib/ingest";
 import { clientHash } from "@/lib/security";
 
 const clip = (v: unknown, n: number) => (typeof v === "string" && v.trim() ? v.trim().slice(0, n) : null);
@@ -15,7 +17,10 @@ export async function POST(req: Request) {
   if ((await recentSubmissionCount(hash, 3600)) >= 10) {
     return Response.json({ error: "slow_down" }, { status: 429 });
   }
+  const p = parseSource(url);
+  const media = p?.platform === "x" ? await fetchTweetVideo(p.embedId) : null;
   const { result, dupe } = await submitSong({
+    ...media,
     url,
     title,
     artist: clip(body?.artist, 80),
