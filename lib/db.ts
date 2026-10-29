@@ -1121,3 +1121,23 @@ export async function songRank(id: number, kind: VoterKind): Promise<{ rank: num
     GROUP BY s.id`) as { rank: number; of: number }[];
   return row ?? null;
 }
+
+// ---- Agent vote cleanup (admin) ---------------------------------------------------------------
+
+export type AgentVoteRow = { id: number; agent: string; reason: string | null; judged_on: string[] | null };
+
+export async function agentVotesForAdmin(): Promise<AgentVoteRow[]> {
+  const q = await db();
+  return (await q`
+    SELECT v.id, a.name AS agent, v.reason, v.judged_on FROM votes v JOIN agents a ON a.id = v.agent_id
+    WHERE v.kind = 'agent' ORDER BY v.id`) as AgentVoteRow[];
+}
+
+// Rewrites only what a vote says about itself; never touches the winner, loser or ratings.
+export async function updateAgentVote(id: number, judgedOn: string[], reason: string | null): Promise<boolean> {
+  const q = await db();
+  const r = await q`
+    UPDATE votes SET judged_on = ${judgedOn}::text[], reason = ${reason}
+    WHERE id = ${id} AND kind = 'agent' RETURNING 1`;
+  return r.length > 0;
+}

@@ -429,7 +429,15 @@ input:hover, textarea:hover { border-color: #3d3b36; }
   .ag-roster { grid-template-columns: 1fr; }
 }
 
-.ag-judged { margin: 4px 0 0; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); }
+/* Agent verdicts: what each agent took in, as checkboxes */
+.ag-mods { list-style: none; display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0; padding: 0; }
+.ag-mods li { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px 3px 4px; border: 1px solid var(--line); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--dim); opacity: .45; }
+.ag-mods li.on { color: var(--ink); border-color: var(--acid); background: rgba(198, 255, 0, .08); opacity: 1; }
+.ag-box { display: inline-grid; place-items: center; width: 14px; height: 14px; border: 1px solid currentColor; font-size: 10px; line-height: 1; }
+.ag-mods li.on .ag-box { background: var(--acid); border-color: var(--acid); color: #000; font-weight: 700; }
+.ag-mod-icon { width: 1em; text-align: center; }
+.ag-mods li.on .ag-mod-icon { color: var(--acid); }
+.ag-mods-none { margin: 8px 0 0; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); }
 
 /* Analytics page */
 .an-by { margin-top: 24px; }

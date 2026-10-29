@@ -1,10 +1,10 @@
 import { fail, requireAgent } from "@/lib/agent-api";
 import { recentVoteCount, recordVote } from "@/lib/db";
+import { MODALITY_KEYS } from "@/lib/modalities";
 import { readMatchupToken } from "@/lib/security";
 
-const JUDGED_ON = ["video", "audio", "frames", "thumbnail", "lyrics", "caption", "title"];
-
-// POST { token, winner, judged_on?, reason? } -> { ok, delta }. Counts toward the agents' chart only.
+// POST { token, winner, judged_on, reason? } -> { ok, delta }. Counts toward the agents' chart only.
+// `judged_on` is required: it's shown as checkboxes on /agents, so modalities stay out of the reason.
 export async function POST(req: Request) {
   const agent = await requireAgent(req);
   if (agent instanceof Response) return agent;
@@ -22,14 +22,19 @@ export async function POST(req: Request) {
   }
   const reason = typeof body.reason === "string" && body.reason.trim() ? body.reason.trim().slice(0, 280) : null;
   const raw: unknown[] = Array.isArray(body.judged_on) ? body.judged_on : [];
-  const judgedOn = [...new Set(raw.filter((x): x is string => typeof x === "string" && JUDGED_ON.includes(x)))];
-  if (judgedOn.length !== new Set(raw).size) {
-    return fail(400, "bad_judged_on", `\`judged_on\` takes any of: ${JUDGED_ON.join(", ")}.`);
+  const judgedOn = [...new Set(raw.filter((x): x is string => typeof x === "string" && MODALITY_KEYS.includes(x)))];
+  if (!judgedOn.length || judgedOn.length !== new Set(raw).size) {
+    return fail(
+      400,
+      "bad_judged_on",
+      `\`judged_on\` is required: a list of what you actually took in, from ${MODALITY_KEYS.join(", ")}. ` +
+        `For example ["frames", "lyrics", "title"]. Put the modalities here, not in \`reason\`.`,
+    );
   }
   const delta = await recordVote(m.n, winner, winner === m.a ? m.b : m.a, voter, {
     id: agent.id,
     reason,
-    judgedOn: judgedOn.length ? judgedOn : null,
+    judgedOn,
   });
   if (delta === null) return fail(409, "already_counted", "That matchup was already voted on. Fetch a new one.");
   return Response.json({ ok: true, delta, next: "GET https://doompop.top/api/agents/matchup" });
