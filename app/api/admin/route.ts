@@ -1,7 +1,9 @@
 import {
-  addVideo, dismissDuplicate, duplicatePairs, findDuplicates, hasDb, listByStatus, mergeSong, removeVideo, SCENES,
-  searchSongs, setAgentDisabled, setHook, setLyrics, splitVideo, stats, updateSong, type Scene, type Song,
+  addVideo, agentVotesForAdmin, dismissDuplicate, duplicatePairs, findDuplicates, hasDb, listByStatus, mergeSong, removeVideo, SCENES,
+  searchSongs, setAgentDisabled, setHook, setLyrics, splitVideo, stats, updateAgentVote, updateSong, type Scene,
+  type Song,
 } from "@/lib/db";
+import { MODALITY_KEYS } from "@/lib/modalities";
 import { isAdmin } from "@/lib/security";
 
 export const dynamic = "force-dynamic";
@@ -10,10 +12,12 @@ const STATUSES: Song["status"][] = ["pending", "approved", "rejected"];
 
 // ?status=… lists a tab, with duplicate hints for pending songs and likely duplicate pairs on the chart.
 // ?q=… finds any song by title, artist or link.
+// ?agentVotes=1 lists every agent vote's id, reason and judged_on (for cleanup).
 export async function GET(req: Request) {
   if (!isAdmin(req)) return Response.json({ error: "nope" }, { status: 401 });
   if (!hasDb) return Response.json({ error: "offline" }, { status: 503 });
   const params = new URL(req.url).searchParams;
+  if (params.get("agentVotes")) return Response.json({ votes: await agentVotesForAdmin() });
   const q = params.get("q");
   if (q !== null) return Response.json({ songs: await searchSongs(q.slice(0, 200)) });
   const raw = params.get("status") as Song["status"];
@@ -34,6 +38,7 @@ export async function GET(req: Request) {
 //   { videoId, split: true }                   detach a video into its own pending song
 //   { videoId, remove: true }                  delete a video (a song keeps at least one)
 //   { id, addUrl, artist? }                    attach another link to song id
+//   { voteId, judgedOn, reason }               set an agent vote's checkboxes and reason (ratings untouched)
 //   { agent, disabled }                        switch a registered AI agent off or back on
 //   { videoId, lyrics }                        set a video's lyrics by hand (for agents only; null clears)
 //   { videoId, hook }                          set where the catchy bit starts, in seconds (null = guess)
@@ -43,6 +48,12 @@ export async function POST(req: Request) {
   const body = await req.json().catch(() => null);
   if (!body) return Response.json({ error: "bad_body" }, { status: 400 });
 
+  if (Number.isInteger(body.voteId) && Array.isArray(body.judgedOn)) {
+    const judgedOn = [...new Set((body.judgedOn as unknown[]).filter((x): x is string => typeof x === "string" && MODALITY_KEYS.includes(x)))];
+    if (!judgedOn.length) return Response.json({ error: "bad_judged_on" }, { status: 400 });
+    const reason = typeof body.reason === "string" && body.reason.trim() ? body.reason.trim().slice(0, 280) : null;
+    return Response.json({ ok: await updateAgentVote(body.voteId, judgedOn, reason) });
+  }
   if (typeof body.agent === "string") return Response.json({ ok: await setAgentDisabled(body.agent, Boolean(body.disabled)) });
 
   const videoId = Number(body.videoId);

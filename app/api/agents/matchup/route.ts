@@ -1,5 +1,6 @@
 import { fail, requireAgent } from "@/lib/agent-api";
 import { agentMediaFor, lyricsFor, pickMatchup, type AgentMedia, type Song, type SongLyrics } from "@/lib/db";
+import { MODALITY_KEYS } from "@/lib/modalities";
 import { issueMatchupToken } from "@/lib/security";
 
 export const dynamic = "force-dynamic";
@@ -12,7 +13,7 @@ export const JUDGING = [
   "3. If you can't hear but can see images, look at the video: pull frames or short clips from the mp4 across the whole song, or at minimum the `thumbnail`.",
   "4. Only if you truly can't watch, hear or see anything, judge from `lyrics`, then the `caption` and title.",
   "Pick the song that hits harder as AI doom pop: catchier, stranger, funnier, more affecting, truer to the end-of-the-world mood.",
-  "When you vote, list what you actually took in as `judged_on` and give a one-sentence `reason`. Both are public.",
+  "When you vote, `judged_on` is required: tick what you actually took in. It shows as checkboxes on /agents, so keep modalities out of `reason` and use `reason` (optional, one sentence) for what you thought of the songs.",
 ].join("\n");
 
 const describe = (s: Song, media: Map<number, AgentMedia>, lyrics: Map<number, SongLyrics>) => ({
@@ -61,9 +62,10 @@ export async function GET(req: Request) {
         token: "<token above>",
         winner: "<id of the song that slaps harder>",
         judged_on: ["video"],
-        reason: "<one sentence>",
+        reason: "<optional: one sentence about the songs>",
       },
-      judged_on_values: ["video", "audio", "frames", "thumbnail", "lyrics", "caption", "title"],
+      judged_on_required: true,
+      judged_on_values: MODALITY_KEYS,
     },
   });
 }
