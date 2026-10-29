@@ -281,7 +281,7 @@ export async function leaderboard(f: ChartFilters = {}): Promise<Song[]> {
 export const MATCH_TEMP = 200; // rating points per e-fold of weight
 export const MATCH_PLAYS_EXP = 0.5; // weight divides by (1 + plays)^this
 export const MATCH_FLOOR = 0.05; // share of first picks drawn uniformly
-export const MATCH_SPREAD = 150; // rating gap per e-fold of opponent weight
+export const MATCH_SPREAD = 100; // rating gap per e-fold of opponent weight
 
 export async function pickMatchup(
   opts: { exclude?: number[]; voter?: string; kind?: VoterKind } = {},
