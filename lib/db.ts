@@ -23,6 +23,7 @@ export type Video = {
   media_url: string | null; // direct MP4 (X), so the vote page can start at the hook
   duration_ms: number | null;
   hook_s: number | null; // where the catchy bit starts; null = guess
+  thumb_url: string | null; // a still for the chart (X's poster frame, or YouTube's thumbnail)
   play_fails?: number; // times a visitor's player couldn't play it (reported by components/SongPlayer)
   play_fail_reason?: string | null;
 };
@@ -223,7 +224,10 @@ async function withVideos(songs: Omit<Song, "videos">[]): Promise<Song[]> {
   const q = await db();
   const vids = (await q`
     SELECT id, song_id, url, platform, embed_id, artist, views, likes, posted_at, media_url, duration_ms, hook_s,
-           play_fails, play_fail_reason FROM videos
+           play_fails, play_fail_reason,
+           COALESCE(thumb_url, CASE WHEN platform = 'youtube' THEN 'https://i.ytimg.com/vi/' || embed_id || '/mqdefault.jpg' END)
+             AS thumb_url
+    FROM videos
     WHERE song_id = ANY(${songs.map((s) => s.id)})
     ORDER BY views DESC NULLS LAST, likes DESC NULLS LAST, added_at ASC`) as Video[];
   const by = new Map<number, Video[]>();
