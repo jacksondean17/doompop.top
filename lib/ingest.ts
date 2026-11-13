@@ -19,6 +19,13 @@ const X_QUERIES = [
 
 const YT_QUERIES = ["AI doom song suno", "AGI singularity song AI generated", "AI alignment song"];
 
+// Songs only: skips clips and teasers under a minute and streams, compilations or talks over ten.
+const MIN_DURATION_MS = 60 * 1000;
+const MAX_DURATION_MS = 10 * 60 * 1000;
+// A hit whose length we couldn't learn is let through, so the admin still sees it.
+const songLength = (f: Found) =>
+  f.durationMs == null || (f.durationMs >= MIN_DURATION_MS && f.durationMs <= MAX_DURATION_MS);
+
 const MIN_INTERVAL_SECONDS = 50 * 60;
 // Posts need time to collect likes before min_faves lets them through, so look back two days.
 const LOOKBACK_SECONDS = 48 * 60 * 60;
@@ -164,7 +171,39 @@ async function searchYouTube(key: string, log: QueryLog[]): Promise<Found[]> {
       });
     }
   }
+  await addYouTubeDurations(key, out, log);
   return out;
+}
+
+// Search results carry no length, so ask the videos endpoint (1 quota unit per 50 ids).
+async function addYouTubeDurations(key: string, found: Found[], log: QueryLog[]): Promise<void> {
+  const idOf = (f: Found) => new URL(f.url).searchParams.get("v");
+  const ids = [...new Set(found.map(idOf).filter((id): id is string => !!id))];
+  const lengths = new Map<string, number>();
+  for (let i = 0; i < ids.length; i += 50) {
+    const url = new URL("https://www.googleapis.com/youtube/v3/videos");
+    url.search = new URLSearchParams({ part: "contentDetails", id: ids.slice(i, i + 50).join(","), key }).toString();
+    const r = await fetch(url);
+    if (!r.ok) {
+      log.push({ source: "youtube-length", query: `${ids.length} ids`, status: r.status, results: 0, error: (await r.text()).slice(0, 200) });
+      return;
+    }
+    const d = (await r.json()) as { items?: { id: string; contentDetails?: { duration?: string } }[] };
+    for (const it of d.items ?? []) {
+      const ms = isoDurationMs(it.contentDetails?.duration);
+      if (ms != null) lengths.set(it.id, ms);
+    }
+  }
+  for (const f of found) f.durationMs = lengths.get(idOf(f) ?? "") ?? null;
+}
+
+// "PT3M25S" -> 205000. Live streams report "P0D", which counts as unknown.
+export function isoDurationMs(iso?: string): number | null {
+  const m = iso?.match(/^P(?:(\d+)D)?T?(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/);
+  if (!m) return null;
+  const [d, h, min, s] = m.slice(1).map((x) => Number(x ?? 0));
+  const ms = (((d * 24 + h) * 60 + min) * 60 + s) * 1000;
+  return ms > 0 ? ms : null;
 }
 
 function decodeEntities(s: string): string {
@@ -243,7 +282,7 @@ export async function transcribeSome(limit: number, log: QueryLog[]): Promise<nu
 
 export type IngestResult =
   | { skipped: "too_soon" | "no_sources" }
-  | { found: number; added: number; sources: string[]; queries: QueryLog[] };
+  | { found: number; wrongLength: number; added: number; sources: string[]; queries: QueryLog[] };
 
 export async function runIngest(force = false, lookback = LOOKBACK_SECONDS, refreshAll = false): Promise<IngestResult> {
   const xKey = process.env.TWITTERAPI_IO_KEY;
@@ -272,9 +311,10 @@ export async function runIngest(force = false, lookback = LOOKBACK_SECONDS, refr
   }
   // Up to 4 songs a run, so a run stays well inside the function time limit.
   await transcribeSome(4, queries).catch(failed("lyrics"));
+  const fits = found.filter(songLength);
   let added = 0;
-  for (const f of found) {
+  for (const f of fits) {
     if (await addCandidate(f)) added++;
   }
-  return { found: found.length, added, sources, queries };
+  return { found: found.length, wrongLength: found.length - fits.length, added, sources, queries };
 }
