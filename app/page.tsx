@@ -1,6 +1,6 @@
 import PlayButton from "@/components/PlayButton";
 import { hasDb, leaderboard, SCENES, stats, type ChartSort, type ChartWindow, type Scene, type Song, type VoterKind } from "@/lib/db";
-import { formatCount, videoLabel } from "@/components/format";
+import { formatCount, PLATFORM_LABEL, videoLabel } from "@/components/format";
 import HowItWorks from "@/components/HowItWorks";
 
 export const dynamic = "force-dynamic";
@@ -121,6 +121,24 @@ function Ticker({ songs, label }: { songs: Song[]; label: string }) {
         {run(true)}
       </div>
     </div>
+  );
+}
+
+// A still from the song's best video, so a scrolling eye can place it. Plays the song like the title button.
+function Thumb({ song }: { song: Song }) {
+  const v = song.videos.find((x) => x.thumb_url) ?? song.videos[0];
+  if (!v) return <div className="thumb" aria-hidden="true" />;
+  return (
+    <PlayButton className="thumb" title={song.title} artist={song.artist} videos={song.videos} pick={v.id}>
+      {v.thumb_url ? (
+        // eslint-disable-next-line @next/next/no-img-element -- remote stills from X/YouTube; no optimisation needed
+        <img src={v.thumb_url} alt="" loading="lazy" decoding="async" />
+      ) : (
+        <span className="thumb-none">{PLATFORM_LABEL[v.platform] ?? v.platform}</span>
+      )}
+      <span className="thumb-play" aria-hidden="true">▶</span>
+      <span className="sr-only">Play {song.title}</span>
+    </PlayButton>
   );
 }
 
@@ -308,6 +326,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<Raw
                 {i === 0 && ranked && <span className="rank-tag">No.</span>}
                 {i + 1}
               </div>
+              <Thumb song={s} />
               <div className="song">
                 <div className="title">
                   {s.videos[0] && (
